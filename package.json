@@ -1,0 +1,21 @@
+{
+  "name": "home",
+  "version": "1.0.0",
+  "description": "![Version](https://img.shields.io/badge/version-1.0-blue) [![WindUI](https://img.shields.io/badge/powered%20by-WindUI-8a2be2)](https://github.com/Footagesus/WindUI)",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "csvtojson": "^2.0.14",
+    "pino": "^10.3.1",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

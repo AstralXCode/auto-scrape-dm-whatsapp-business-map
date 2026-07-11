@@ -1,0 +1,47 @@
+# ── ASTRAL ──
+astral_data/
+astral_data/wa_status.json
+astral_data/wa_sent.json
+astral_data/wa_acc.json
+astral_data/wa_chats.json
+astral_data/wa_queue.json
+.astral_auth/
+*.csv
+
+# ── Node.js ──
+node_modules/
+package-lock.json
+npm-debug.log*
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ── Environment ──
+.env
+.env.local
+.env.*.local
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ── Logs ──
+*.log
+logs/
+
+# ── Auth / Secrets ──
+astral_auth/
+*.pem
+*.key
