@@ -13,6 +13,7 @@ const STATUS_FILE = path.join(DATA_DIR, 'wa_status.json');
 const QUEUE_FILE = path.join(DATA_DIR, 'wa_queue.json');
 const SENT_FILE = path.join(DATA_DIR, 'wa_sent.json');
 const ACC_FILE = path.join(DATA_DIR, 'wa_acc.json');
+const logger = pino({ level: 'silent' });
 const CHAT_FILE = path.join(DATA_DIR, 'wa_chats.json');
 const MY_PHONE = '6283140461222';
 const MAX_ACC = 3;
@@ -79,6 +80,14 @@ function ensureDirs() {
 function writeStatus(obj) {
     fs.mkdirSync(path.dirname(STATUS_FILE), { recursive: true });
     fs.writeFileSync(STATUS_FILE, JSON.stringify({ ...obj, ts: new Date().toISOString() }, null, 2));
+}
+
+function readStatus() {
+    try {
+        return JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8'));
+    } catch {
+        return { connected: false };
+    }
 }
 
 function readQueue() {
@@ -473,6 +482,20 @@ async function sendMessages(sock, queue, delayMs) {
     let ok = 0, fail = 0, skipped = 0;
 
     for (let i = 0; i < queue.length; i++) {
+        // ── Cek session masih hidup ──
+        const statusNow = readStatus();
+        if (statusNow.error === 'logged_out' || statusNow.stopped) {
+            console.log('  [!] Session sudah logged out. STOP mengirim.');
+            break;
+        }
+
+        // ── Warm-up: first 5 messages slower ──
+        let thisDelay = delayMs;
+        if (ok < 5) {
+            thisDelay = 35000 + Math.floor(Math.random() * 15000); // 35-50 detik
+            console.log(`  [WARMUP] ${ok+1}/5 pesan pertama, delay ${Math.round(thisDelay/1000)}s`);
+        }
+
         // ── Cek rate limit ──
         const recentCount = getRecentSendCount();
         if (recentCount >= RATE_LIMIT) {
@@ -545,6 +568,12 @@ async function runDaemon(sock) {
     setInterval(async () => {
         if (sending) return;
         
+        // ── Health check: pastikan masih connected ──
+        const status = readStatus();
+        if (!status.connected || status.error === 'logged_out' || status.stopped) {
+            return; // Jangan coba kirim kalau session udah mati
+        }
+        
         // Cek apakah max acc tercapai
         if (isMaxAccReached()) {
             console.log(`  [!] Max acc (${MAX_ACC}) tercapai. DM baru dihentikan. Auto-reply tetap aktif.`);
@@ -557,7 +586,7 @@ async function runDaemon(sock) {
             const recentCount = getRecentSendCount();
             console.log(`\n  [!] Queue ditemukan: ${queue.length} target (terkirim jam ini: ${recentCount}/${RATE_LIMIT})`);
             
-            await sendMessages(sock, queue, 5000);
+                await sendMessages(sock, queue, 30000);
             writeQueue([]);
             sending = false;
             
@@ -565,7 +594,7 @@ async function runDaemon(sock) {
             console.log(`  [*] Total terkirim jam ini: ${newCount}/${RATE_LIMIT}`);
             console.log('  [*] Menunggu queue berikutnya...\n');
         }
-    }, 8000);
+    }, 15000);
 }
 
 async function startSock(args, mode) {
@@ -638,9 +667,19 @@ async function startSock(args, mode) {
             }
 
             if (reason === DisconnectReason.loggedOut) {
-                console.log('  [!] Logged out. Hapus .astral_auth lalu jalankan ulang.');
-                writeStatus({ connected: false, error: 'logged_out' });
-                process.exit(1);
+                console.log('');
+                console.log('  ╔══════════════════════════════════════════╗');
+                console.log('  ║  [!] SESSION LOGGED OUT BY WHATSAPP      ║');
+                console.log('  ║  WA mendeteksi spam & memutus session.   ║');
+                console.log('  ║  Solusi:                                 ║');
+                console.log('  ║  1. Jalankan: node astral_wa.js pair     ║');
+                console.log('  ║  2. Pair ulang nomor WA Anda             ║');
+                console.log('  ║  3. Tunggu 1-2 jam sebelum kirim lagi   ║');
+                console.log('  ╚══════════════════════════════════════════╝');
+                console.log('');
+                sending = false;
+                writeStatus({ connected: false, error: 'logged_out', stopped: true, reason: 'session_banned' });
+                return; // JANGAN auto-reconnect, stop!
             }
 
             console.log(`  [*] Reconnecting (reason: ${reason})...`);
@@ -651,6 +690,7 @@ async function startSock(args, mode) {
         if (connection === 'open') {
             paired = true;
             console.log('\n  [✓] WhatsApp terhubung!');
+            process.stdout.write('\x07'); // Terminal bell
             writeStatus({ connected: true, paired: true });
 
             if (mode === 'pair') {

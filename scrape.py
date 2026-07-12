@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, os, time, itertools, random, json, re, csv, subprocess, termios, tty, math
+import sys, os, time, itertools, random, json, re, csv, subprocess, termios, tty, math, requests
 
 RAINBOW = [
     "\033[38;5;196m","\033[38;5;202m","\033[38;5;208m","\033[38;5;214m",
@@ -33,14 +33,296 @@ DATA_DIR = os.path.join(HOME, "astral_data")
 WA_SCRIPT = os.path.join(HOME, "astral_wa.js")
 STATUS_FILE = os.path.join(DATA_DIR, "wa_status.json")
 QUEUE_FILE = os.path.join(DATA_DIR, "wa_queue.json")
-SERP_API_KEY = "0d794e5de5d87e239f66f842df25c59e8299d9585f655e6940cf2a7b84495e38"
+API_CONFIG_FILE = os.path.join(DATA_DIR, "api_config.json")
 WIDTH = 47
+
+def _load_api_keys():
+    """Load API keys from config file"""
+    if os.path.exists(API_CONFIG_FILE):
+        try:
+            with open(API_CONFIG_FILE) as f:
+                data = json.load(f)
+                keys = data.get("serpapi_keys", [])
+                if keys: return keys
+        except: pass
+    return []
+
+def _save_api_keys(keys):
+    """Save API keys to config file"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(API_CONFIG_FILE, "w") as f:
+        json.dump({"serpapi_keys": keys}, f, indent=2)
+
+SERP_API_KEYS = _load_api_keys()
+SERP_API_KEY = SERP_API_KEYS[0] if SERP_API_KEYS else None
+STORAGE_DIR = "/sdcard/ASTRAL_DATA"
+LICENSE_FILE = os.path.join(DATA_DIR, "license.json")
+TRIAL_DAYS = 3
 
 MENU = [
     ("Scrape & Auto DM",         "Scrape semua kota + auto DM 24/7 otomatis"),
     ("Setting WhatsApp",         "Login/logout, ganti nomor, pairing"),
+    ("Setting API",              "Kelola API key SerpApi (multi-key fallback)"),
     ("Exit",                     "Keluar dari program"),
 ]
+
+# ── LICENSE SYSTEM ──
+def _get_device_id():
+    """Get unique device ID from Termux prefix"""
+    try:
+        import hashlib
+        prefix = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
+        return hashlib.md5(prefix.encode()).hexdigest()[:12]
+    except:
+        return "default"
+
+def _generate_license_key(device_id, expiry_days=365):
+    """Generate license key (run this on seller side)"""
+    import hashlib
+    secret = "ASTRAL_X7K9M2"
+    raw = f"{device_id}:{secret}:{expiry_days}"
+    key = hashlib.sha256(raw.encode()).hexdigest()[:16].upper()
+    return f"ASTRAL-{key[:4]}-{key[4:8]}-{key[8:12]}-{key[12:]}"
+
+def _verify_license(key, device_id):
+    """Verify license key"""
+    import hashlib
+    secret = "ASTRAL_X7K9M2"
+    for days in [365, 30, 7]:
+        raw = f"{device_id}:{secret}:{days}"
+        expected = hashlib.sha256(raw.encode()).hexdigest()[:16].upper()
+        expected_fmt = f"ASTRAL-{expected[:4]}-{expected[4:8]}-{expected[8:12]}-{expected[12:]}"
+        if key.upper() == expected_fmt:
+            return True
+    return False
+
+def _load_license():
+    """Load license info"""
+    if os.path.exists(LICENSE_FILE):
+        try:
+            with open(LICENSE_FILE) as f:
+                return json.load(f)
+        except: pass
+    return {}
+
+def _save_license(data):
+    """Save license info"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(LICENSE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def _check_license():
+    """Check if license is valid. Returns (is_valid, is_trial, days_left)"""
+    device_id = _get_device_id()
+    lic = _load_license()
+
+    # Check full license
+    if lic.get("type") == "full" and lic.get("key"):
+        if _verify_license(lic["key"], device_id):
+            return True, False, -1  # Valid, not trial, unlimited
+
+    # Check trial
+    if lic.get("type") == "trial":
+        start = lic.get("start_ts", 0)
+        elapsed = time.time() - start
+        remaining = (TRIAL_DAYS * 86400) - elapsed
+        if remaining > 0:
+            days_left = remaining / 86400
+            return True, True, days_left
+        else:
+            return False, True, 0  # Trial expired
+
+    # First run: start trial
+    _save_license({
+        "type": "trial",
+        "start_ts": time.time(),
+        "device_id": device_id,
+    })
+    return True, True, TRIAL_DAYS
+
+def _first_time_setup():
+    """Setup wizard untuk pertama kali"""
+    keys = _load_api_keys()
+    if keys:
+        return True  # Sudah ada API key
+
+    clear()
+    print()
+    for l in BANNER: print(f"  {rainbow_line(l)}")
+    print()
+    print(f"  {Y}┌─────────────────────────────────────────┐{R}")
+    print(f"  {Y}│  SETUP PERTAMA KALI                    │{R}")
+    print(f"  {Y}│  Masukkan API key SerpApi Anda          │{R}")
+    print(f"  {Y}└─────────────────────────────────────────┘{R}")
+    print()
+    print(f"  {C}Dapatkan API key GRATIS di:{R}")
+    print(f"  {D}https://serpapi.com/manage-api-key{R}")
+    print(f"  {D}Free tier: 100 pencarian/bulan{R}")
+    print()
+    print(f"  {D}Tip: Daftar banyak akun = banyak key gratis!{R}")
+    print()
+
+    while True:
+        key = input(f"  {G}▸ Masukkan SerpApi key: {R}").strip()
+        if not key:
+            print(f"  {RED}[!] Kosong.{R}")
+            continue
+
+        # Verify key works
+        print(f"  {C}[*] Verifikasi key...{R}")
+        try:
+            import requests
+            resp = requests.get("https://serpapi.com/account",
+                              params={"api_key": key}, timeout=10)
+            data = resp.json()
+            if "plan" in data:
+                print(f"  {G}[✓] Key valid! Plan: {data.get('plan', 'free')}{R}")
+                _save_api_keys([key])
+                time.sleep(1)
+                return True
+            else:
+                print(f"  {RED}[!] Key tidak valid. Coba lagi.{R}")
+        except Exception as e:
+            print(f"  {RED}[!] Error verifikasi: {e}{R}")
+            print(f"  {D}Simpan key anyway? (y/n){R}")
+            if input(f"  {G}▸ {R}").strip().lower() == "y":
+                _save_api_keys([key])
+                return True
+
+def _activate_license(key):
+    """Activate full license"""
+    device_id = _get_device_id()
+    if _verify_license(key, device_id):
+        _save_license({
+            "type": "full",
+            "key": key,
+            "device_id": device_id,
+            "activated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        return True
+    return False
+
+def _show_license_screen():
+    """Show license/activation screen"""
+    is_valid, is_trial, days_left = _check_license()
+
+    if is_valid and not is_trial:
+        return True  # Full license, skip screen
+
+    clear()
+    print()
+    for l in BANNER: print(f"  {rainbow_line(l)}")
+    print()
+
+    if is_trial and days_left > 0:
+        print(f"  {Y}┌─────────────────────────────────────────┐{R}")
+        print(f"  {Y}│  TRIAL MODE - {days_left:.1f} hari tersisa          │{R}")
+        print(f"  {Y}│  Fitur lengkap, semua bisa dipakai      │{R}")
+        print(f"  {Y}│  Setelah habis, beli full version       │{R}")
+        print(f"  {Y}└─────────────────────────────────────────┘{R}")
+        print()
+        print(f"  {D}Tekan Enter untuk lanjut (trial)...{R}")
+        input()
+        return True
+
+    # Trial expired
+    print(f"  {RED}┌─────────────────────────────────────────┐{R}")
+    print(f"  {RED}│  TRIAL HABIS!                           │{R}")
+    print(f"  {RED}│  Silakan beli full version              │{R}")
+    print(f"  {RED}│  Hub: @AstralXCode (WhatsApp/Telegram)  │{R}")
+    print(f"  {RED}└─────────────────────────────────────────┘{R}")
+    print()
+
+    device_id = _get_device_id()
+    print(f"  {C}Device ID: {device_id}{R}")
+    print(f"  {D}Kirim Device ID ini ke penjual untuk beli license{R}")
+    print()
+
+    print(f"  [1] Masukkan license key")
+    print(f"  [0] Keluar")
+    print()
+    ch = input(f"  {G}▸ Pilih: {R}").strip()
+
+    if ch == "1":
+        print()
+        key = input(f"  {G}▸ Masukkan license key: {R}").strip()
+        if _activate_license(key):
+            print(f"\n  {G}[✓] License activated! Selamat menggunakan ASTRAL.{R}")
+            time.sleep(2)
+            return True
+        else:
+            print(f"\n  {RED}[!] License key tidak valid.{R}")
+            time.sleep(2)
+            return False
+    return False
+
+def _export_pdf(businesses, filename="businesses.pdf"):
+    """Export businesses to PDF with Unicode support"""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        print(f"  {RED}[!] fpdf2 belum terinstall. Jalankan: pip install fpdf2{R}")
+        return None
+
+    os.makedirs(STORAGE_DIR, exist_ok=True)
+    pdf_path = os.path.join(STORAGE_DIR, filename)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    # Add Unicode font
+    font_path = None
+    for p in ["/data/data/com.termux/files/usr/share/fonts/TTF/DejaVuSans.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+              os.path.join(HOME, "DejaVuSans.ttf")]:
+        if os.path.exists(p):
+            font_path = p
+            break
+
+    if os.path.exists(font_path):
+        pdf.add_font("DejaVu", "", font_path, uni=True)
+        bold_path = font_path.replace("DejaVuSans.ttf", "DejaVuSans-Bold.ttf")
+        if os.path.exists(bold_path):
+            pdf.add_font("DejaVu", "B", bold_path, uni=True)
+        else:
+            pdf.add_font("DejaVu", "B", font_path, uni=True)
+        font_name = "DejaVu"
+    else:
+        font_name = "Helvetica"
+
+    # Title page
+    pdf.add_page()
+    pdf.set_font(font_name, "B", 24)
+    pdf.cell(0, 15, "ASTRAL Business Directory", ln=True, align="C")
+    pdf.set_font(font_name, "", 12)
+    pdf.cell(0, 10, f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align="C")
+    pdf.cell(0, 10, f"Total: {len(businesses)} businesses", ln=True, align="C")
+    pdf.ln(10)
+
+    # Business entries
+    for i, b in enumerate(businesses):
+        if pdf.get_y() > 250:
+            pdf.add_page()
+
+        pdf.set_font(font_name, "B", 11)
+        name = str(b.get("name", "N/A"))[:80]
+        pdf.cell(0, 7, f"{i+1}. {name}", ln=True)
+
+        pdf.set_font(font_name, "", 9)
+        phone = str(b.get("phone", "-"))
+        address = str(b.get("address", "-"))[:100]
+        category = str(b.get("category", "-"))
+        rating = str(b.get("rating", "-"))
+        reviews = str(b.get("reviews", "-"))
+        website = str(b.get("website", "-"))
+
+        pdf.cell(0, 5, f"   Phone: {phone}  |  Rating: {rating} ({reviews})", ln=True)
+        pdf.cell(0, 5, f"   Address: {address}", ln=True)
+        pdf.cell(0, 5, f"   Category: {category}  |  Website: {website}", ln=True)
+        pdf.ln(3)
+
+    pdf.output(pdf_path)
+    return pdf_path
 
 def clear(): os.system("cls" if os.name=="nt" else "clear")
 
@@ -65,13 +347,68 @@ def flash_banner(color):
     for l in BANNER: print(f"  {color}{l}{R}")
     print(f"\n  {color}{SUBTITLE}{R}")
 
+def _banner_typewriter():
+    """Animasi typewriter untuk ASCII art + subtitle"""
+    # Type plain ASCII art line by line
+    for line in BANNER:
+        for ci in range(len(line)):
+            sys.stdout.write(f"\r  {line[:ci+1]}")
+            sys.stdout.flush()
+            _bell()
+            time.sleep(0.005)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    # Type subtitle with color
+    sys.stdout.write("  ")
+    for i, ch in enumerate(SUBTITLE):
+        if ch == " ":
+            sys.stdout.write(ch)
+        else:
+            color = RAINBOW[(i+10) % len(RAINBOW)]
+            sys.stdout.write(f"{color}{ch}{R}")
+        sys.stdout.flush()
+        _bell()
+        time.sleep(0.03)
+    sys.stdout.write("\n\n")
+    sys.stdout.flush()
+    time.sleep(0.8)
+
+def _play_sound(name):
+    """Play sound effect (non-blocking)"""
+    sound_path = os.path.join(DATA_DIR, f"{name}.wav")
+    if os.path.exists(sound_path):
+        try:
+            subprocess.Popen(
+                ["termux-media-player", "play", sound_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        except: pass
+
+def _bell():
+    """Instant tick sound via paplay"""
+    tick_path = os.path.join(DATA_DIR, "tick.wav")
+    if os.path.exists(tick_path):
+        try:
+            subprocess.Popen(
+                ["paplay", tick_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        except: pass
+
 def loading():
+    _play_sound("beep")
     spinner = random.choice([["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"],["⣾","⣽","⣻","⢿","⡿","⣟","⣯","⣷"],["◐","◓","◑","◒"],["◰","◳","◲","◱"]])
     phases = ["Memuat modul","Init ASTRAL","Connect server","Load resources","Prepare engine","Finalisasi"]
     bar_len, phase_time = 30, 100/len(phases)
+    last_phase = -1
     for i, frame in enumerate(itertools.cycle(spinner)):
         pct = min(i*2, 100)
-        phase = phases[min(int(pct/phase_time), len(phases)-1)]
+        cur_phase = min(int(pct/phase_time), len(phases)-1)
+        phase = phases[cur_phase]
+        if cur_phase != last_phase:
+            _play_sound("tick")
+            last_phase = cur_phase
         filled = int(bar_len*pct/100)
         color = RAINBOW[i%len(RAINBOW)]
         bar = f"{color}{'█'*filled}{D}{'░'*(bar_len-filled)}{R}"
@@ -80,6 +417,7 @@ def loading():
         if pct >= 100: break
         time.sleep(0.04)
     sys.stdout.write("\r"+" "*80+"\r"); sys.stdout.flush()
+    _play_sound("success")
     for j, txt in enumerate(["Modul loaded","ASTRAL init","Server OK","Resources ready","Engine ready","All systems go"]):
         print(f"  {RAINBOW[j*4%len(RAINBOW)]}[✓] {txt}{R}"); time.sleep(0.12)
     time.sleep(0.3)
@@ -98,27 +436,82 @@ def box_line(text, color=""):
     pad = WIDTH - len(text) - 4
     return f"  {color}|  {text}{' '*max(pad,0)}|{R}"
 
-def print_menu(sel):
+def print_menu(sel, typewriter_idx=-1):
     print()
     print(f"  {B}{M}+{'='*WIDTH}+{R}")
     for i, (name, desc) in enumerate(MENU):
-        c = f"{B}{G}" if i==sel else D
-        tag = "[●]" if i==sel else "[○]"
-        print(box_line(f"{tag} {name}", c))
-        print(box_line(f"    {desc}", c))
+        is_sel = (i == sel)
+        c = f"{B}{G}" if is_sel else D
+        tag = "[●]" if is_sel else "[○]"
+
+        if is_sel and typewriter_idx >= 0:
+            # Typewriter effect untuk item terpilih
+            display_name = name[:typewriter_idx+1]
+            pad_name = WIDTH - len(f"{tag} {name}") - 4
+            name_line = f"  {c}|  {tag} {display_name}{' '*max(pad_name - len(display_name), 0)}|{R}"
+            print(name_line)
+            pad_desc = WIDTH - len(f"    {desc}") - 4
+            desc_line = f"  {c}|    {desc}{' '*max(pad_desc, 0)}|{R}"
+            print(desc_line)
+        else:
+            print(box_line(f"{tag} {name}", c))
+            print(box_line(f"    {desc}", c))
+
         if i < len(MENU)-1: print(box_line(""))
+    print(box_line(""))
+    print(box_line("↑/↓ pilih  Enter OK  q keluar", D))
+    print(f"  {B}{M}+{'='*WIDTH}+{R}")
+
+def _menu_initial_load():
+    """Menu pertama kali: typewriter effect per item"""
+    print()
+    print(f"  {B}{M}+{'='*WIDTH}+{R}")
+
+    for i, (name, desc) in enumerate(MENU):
+        c = f"{B}{G}" if i==0 else D
+        tag = "[●]" if i==0 else "[○]"
+
+        # Typewriter untuk item pertama (selected)
+        if i == 0:
+            for ci in range(len(name)):
+                display = name[:ci+1]
+                pad = WIDTH - len(f"{tag} {name}") - 4
+                sys.stdout.write(f"\r  {c}|  {tag} {display}{' '*max(pad - len(display), 0)}|{R}\n")
+                sys.stdout.flush()
+                sys.stdout.write(f"\033[F")  # Move cursor up
+                _bell()
+                time.sleep(0.02)
+            # Final
+            sys.stdout.write(f"\r  {c}|  {tag} {name}{' '*max(pad, 0)}|{R}\n")
+        else:
+            print(box_line(f"{tag} {name}", c))
+
+        print(box_line(f"    {desc}"))
+        if i < len(MENU)-1: print(box_line(""))
+
     print(box_line(""))
     print(box_line("↑/↓ pilih  Enter OK  q keluar", D))
     print(f"  {B}{M}+{'='*WIDTH}+{R}")
 
 def menu_select():
     sel = 0
+    old_sel = -1
+    clear(); rainbow_banner(); print_menu(sel)
     while True:
-        clear(); rainbow_banner(); print_menu(sel)
         key = get_key()
-        if key=="UP": sel = (sel-1)%len(MENU)
-        elif key=="DOWN": sel = (sel+1)%len(MENU)
-        elif key=="ENTER": return sel
+        if key=="UP":
+            _bell()
+            sel = (sel-1)%len(MENU)
+            clear(); rainbow_banner(); print_menu(sel)
+            old_sel = sel
+        elif key=="DOWN":
+            _bell()
+            sel = (sel+1)%len(MENU)
+            clear(); rainbow_banner(); print_menu(sel)
+            old_sel = sel
+        elif key=="ENTER":
+            _bell()
+            return sel
         elif key=="QUIT": return -1
 
 # ──────────────────────────────────────────────────────────────
@@ -835,36 +1228,67 @@ def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", 
             "lang": det_lang, "snippet": snippet[:200] if snippet else "",
         })
 
-    # ── Source 1: SerpApi (primary) ──
+    # ── Source 1: SerpApi (primary, multi-key fallback) ──
     print(f"  {C}[1/3] SerpApi Google Maps search...{R}")
     serp_count = 0
-    if SERP_API_KEY:
+
+    def _try_serpapi(api_key, query, lat, lng, zoom):
+        """Try SerpApi with single key, return results"""
+        params = {
+            "engine": "google_maps",
+            "q": query,
+            "ll": f"@{lat},{lng},{zoom}z",
+            "type": "search",
+            "api_key": api_key,
+        }
+        resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+        return resp.json()
+
+    def _parse_serpapi_results(data):
+        """Parse SerpApi results into businesses"""
+        nonlocal serp_count
+        results = []
+        if "local_results" in data:
+            for r in data["local_results"]:
+                results.append({
+                    "name": r.get("title", ""),
+                    "phone": r.get("phone", ""),
+                    "address": r.get("address", ""),
+                    "rating": r.get("rating", ""),
+                    "reviews": r.get("reviews", ""),
+                    "website": r.get("website", ""),
+                    "category": r.get("type", ""),
+                    "snippet": r.get("place_id_search", ""),
+                })
+        return results
+
+    # Try each key until one works
+    keys = _load_api_keys()
+    for ki, api_key in enumerate(keys):
+        masked = api_key[:8] + "..." + api_key[-6:] if len(api_key) > 20 else api_key
+        print(f"    {D}→ Coba key [{ki+1}/{len(keys)}]: {masked}{R}")
         try:
-            params = {
-                "engine": "google_maps",
-                "q": query,
-                "ll": f"@{lat},{lng},{zoom}z",
-                "type": "search",
-                "api_key": SERP_API_KEY,
-            }
-            resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
-            data = resp.json()
-            if "local_results" in data:
-                for r in data["local_results"]:
-                    name = r.get("title", "")
-                    phone = r.get("phone", "")
-                    address = r.get("address", "")
-                    rating = r.get("rating", "")
-                    reviews = r.get("reviews", "")
-                    website = r.get("website", "")
-                    category = r.get("type", "")
-                    snippet = r.get("place_id_search", "")
-                    _add(name, phone=phone, address=address, rating=rating,
-                         reviews=reviews, website=website, category=category, snippet=snippet)
-                serp_count = len(data["local_results"])
-            elif "error" in data:
-                print(f"    {RED}→ SerpApi error: {data['error']}{R}")
-            # Check for pagination - get next pages too
+            data = _try_serpapi(api_key, query, lat, lng, zoom)
+
+            # Check if key hit rate limit
+            if "error" in data:
+                err_msg = data.get("error", "")
+                if "429" in err_msg or "rate" in err_msg.lower() or "limit" in err_msg.lower():
+                    print(f"    {Y}→ Key [{ki+1}] limit! Coba key berikutnya...{R}")
+                    continue
+                else:
+                    print(f"    {RED}→ SerpApi error: {err_msg}{R}")
+                    continue
+
+            # Parse results
+            results = _parse_serpapi_results(data)
+            for r in results:
+                _add(r["name"], phone=r["phone"], address=r["address"],
+                     rating=r["rating"], reviews=r["reviews"], website=r["website"],
+                     category=r["category"], snippet=r["snippet"])
+            serp_count = len(results)
+
+            # Pagination - get next pages
             if "serpapi_pagination" in data and serp_count > 0:
                 next_pages = data["serpapi_pagination"].get("other_pages", {})
                 for page_key, page_url in list(next_pages.items())[:2]:
@@ -873,21 +1297,30 @@ def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", 
                         data2 = resp2.json()
                         if "local_results" in data2:
                             for r in data2["local_results"]:
-                                name = r.get("title", "")
-                                phone = r.get("phone", "")
-                                address = r.get("address", "")
-                                rating = r.get("rating", "")
-                                reviews = r.get("reviews", "")
-                                website = r.get("website", "")
-                                category = r.get("type", "")
-                                _add(name, phone=phone, address=address, rating=rating,
-                                     reviews=reviews, website=website, category=category)
+                                _add(r.get("title",""), phone=r.get("phone",""),
+                                     address=r.get("address",""), rating=r.get("rating",""),
+                                     reviews=r.get("reviews",""), website=r.get("website",""),
+                                     category=r.get("type",""))
                             serp_count += len(data2["local_results"])
                         time.sleep(0.5)
                     except: break
-            print(f"    {D}→ {serp_count} hasil dari SerpApi{R}")
+
+            print(f"    {G}→ {serp_count} hasil dari SerpApi (key {ki+1}){R}")
+            break  # Success! Don't try next key
+
+        except requests.exceptions.RequestException as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                print(f"    {Y}→ Key [{ki+1}] rate limited! Coba key berikutnya...{R}")
+                continue
+            else:
+                print(f"    {RED}→ Key [{ki+1}] error: {e}{R}")
+                continue
         except Exception as e:
-            print(f"    {RED}→ SerpApi error: {e}{R}")
+            print(f"    {RED}→ Key [{ki+1}] error: {e}{R}")
+            continue
+
+    if serp_count == 0 and keys:
+        print(f"    {Y}→ Semua key limit/gagal, fallback ke tbm=map{R}")
 
     # ── Source 2: tbm=map search (fallback / supplement) ──
     if serp_count == 0:
@@ -1651,32 +2084,33 @@ def write_queue(queue):
     with open(QUEUE_FILE, "w") as f: json.dump(queue, f, indent=2)
 
 def flow_scrape_auto_dm():
-    """ONE-CLICK: Scrape + Auto DM + Auto Reply - Jalan otomatis 24/7"""
+    """ONE-CLICK: Scrape 3-5 targets → DM langsung → repeat. Natural flow."""
     clear(); rainbow_banner()
     print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
     print(box_line("SCRAPE & AUTO DM 24/7", f"{B}{G}"))
     print(box_line(""))
-    print(box_line("Semua jalan otomatis:", Y))
-    print(box_line("  1. Scrape UMKM tanpa website", Y))
-    print(box_line("  2. Auto DM rate-limited (70/jam)", Y))
-    print(box_line("  3. Auto-reply kalau klien balas", Y))
-    print(box_line("  4. Stop otomatis saat 3 klien acc", Y))
+    print(box_line("Flow natural (anti-ban):", Y))
+    print(box_line("  1. Scrape 3-5 bisnis baru", Y))
+    print(box_line("  2. DM langsung 1-1 (delay 30s)", Y))
+    print(box_line("  3. Tunggu terkirim, lalu scrape lagi", Y))
+    print(box_line("  4. Auto-reply kalau klien balas", Y))
+    print(box_line("  5. Stop saat 3 klien acc", Y))
+    print(box_line(""))
+    print(box_line("Kalau WA belum ready, scrape aja dulu", Y))
+    print(box_line("DM otomatis jalan kalau WA udah connect", Y))
     print(box_line(""))
     print(box_line("Tekan Ctrl+C untuk berhenti", D))
     print(f"  {B}{M}+{'='*WIDTH}+{R}\n")
 
-    # Cek status WA dulu
+    # Cek status WA
     wa_ok = False
+    wa_restricted = False
     if os.path.exists(STATUS_FILE):
         try:
             with open(STATUS_FILE) as f: st = json.load(f)
-            if st.get("connected"): wa_ok = True
+            if st.get("connected") and not st.get("error"): wa_ok = True
+            elif st.get("error") == "logged_out": wa_restricted = True
         except: pass
-
-    if not wa_ok:
-        print(f"  {RED}[!] WhatsApp belum terhubung!{R}")
-        print(f"  {D}Pilih 'Setting WhatsApp' dulu untuk login.{R}")
-        input(f"\n  {D}Tekan Enter untuk kembali...{R}"); return
 
     # Tampilkan stats
     sent = load_sent()
@@ -1684,33 +2118,60 @@ def flow_scrape_auto_dm():
     today_sent = sum(1 for v in sent.values()
                     if time.time() - time.mktime(time.strptime(v["ts"][:19], "%Y-%m-%dT%H:%M:%S")) < 86400)
     print(f"  {C}📊 Stats:{R}")
-    print(f"     Nomor sudah DM (24 jam): {today_sent}")
+    print(f"     Nomor sudah DM: {len(sent)} (hari ini: {today_sent})")
     print(f"     Klien acc: {len(acc)}/3")
     print(f"     Lokasi: {len(LOCI)} kota/kategori")
-    print(f"     Rate limit: 70 DM/jam")
+
+    if wa_restricted:
+        print(f"\n  {Y}[!] WA belum ready (restricted/logged out){R}")
+        print(f"  {Y}    Mode: SCRAPE ONLY (simpan CSV){R}")
+        print(f"  {Y}    DM otomatis jalan kalau WA connect{R}")
+    elif wa_ok:
+        print(f"\n  {G}✓ WA ready! Mode: SCRAPE + DM{R}")
+    else:
+        print(f"\n  {Y}[!] WA belum terhubung{R}")
+        print(f"  {Y}    Mode: SCRAPE ONLY (simpan CSV){R}")
     print()
 
     confirm = input(f"  {G}▸ Jalankan? (y/n): {R}").strip().lower()
     if confirm != "y": print(f"  {D}Dibatalkan.{R}"); return
 
-    # Jalankan Baileys daemon di background
-    print(f"\n  {C}[*] Menjalankan WhatsApp daemon...{R}")
-    wa_proc = subprocess.Popen(
-        ["node", WA_SCRIPT, "daemon"],
-        cwd=HOME,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(3)
-    print(f"  {G}✓ WhatsApp daemon aktif (PID: {wa_proc.pid}){R}")
+    # Clear queue lama dulu
+    write_queue([])
 
-    print(f"\n  {C}[*] Mulai scrape & auto DM...{R}")
+    # Jalankan Baileys daemon di background (kalau WA ready)
+    wa_proc = None
+    daemon_ready = False
+    if wa_ok:
+        print(f"\n  {C}[*] Menjalankan WhatsApp daemon...{R}")
+        wa_proc = subprocess.Popen(
+            ["node", WA_SCRIPT, "daemon"],
+            cwd=HOME,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(5)
+        print(f"  {G}✓ WhatsApp daemon aktif (PID: {wa_proc.pid}){R}")
+        daemon_ready = True
+    else:
+        print(f"\n  {D}[*] WA belum ready. Scrape only mode.{R}")
+        print(f"  {D}    DM otomatis aktif kalau WA connect.{R}")
+
+    print(f"\n  {C}[*] Mulai scrape flow...{R}")
+    print(f"  {D}Setiap target: scrape → DM (kalau ready) → repeat{R}")
     print(f"  {D}Tekan Ctrl+C untuk berhenti{R}\n")
+
+    BATCH_SIZE = 3
+    total_sent = 0
+    total_scraped = 0
+    all_targets = []  # Simpan semua target untuk DM nanti
 
     try:
         cycle = 0
+        loc_idx = 0
+
         while True:
-            # Cek apakah max acc tercapai
+            # Cek max acc
             if is_max_acc_reached():
                 acc_count = get_acc_count()
                 print(f"\n  {G}[🎯] {acc_count} klien ACC! DM berhenti, auto-reply tetap aktif.{R}")
@@ -1721,59 +2182,112 @@ def flow_scrape_auto_dm():
                     print(f"  {G}✓ Acc count direset. Lanjut scrape...{R}")
                 continue
 
-            cycle += 1
-            print(f"\n{'='*50}")
-            print(f"  {G}🔄 CYCLE #{cycle} - {time.strftime('%H:%M:%S')}{R}")
-            print(f"{'='*50}")
-
-            for qi, (query, kota) in enumerate(LOCI):
-                # Cek apakah max acc tercapai di tengah cycle
-                if is_max_acc_reached():
-                    print(f"\n  {Y}[!] Max acc tercapai, hentikan cycle.{R}")
-                    break
-
-                # Cek rate limit
+            # Cek rate limit (kalau DM aktif)
+            if daemon_ready:
                 recent = sum(1 for v in load_sent().values()
                             if time.time() - time.mktime(time.strptime(v["ts"][:19], "%Y-%m-%dT%H:%M:%S")) < 3600)
-                if recent >= 70:
-                    print(f"\n  {Y}[!] Rate limit 70/jam. Pause 10 menit...{R}")
+                if recent >= 65:
+                    _play_sound("error")
+                    print(f"\n  {Y}[!] Rate limit: {recent}/70 per jam. Pause 10 menit...{R}")
                     time.sleep(600)
-
-                print(f"\n  {C}[{qi+1}/{len(LOCI)}] {query}{R}")
-                coords = COUNTRY_COORDS.get(kota, (-6.2, 106.8, 12, "en", "id"))
-                businesses, err = scrape_grid(query, max_results=10,
-                    lat=coords[0], lng=coords[1], zoom=coords[2], lang=coords[3], gl=coords[4])
-                if err:
-                    print(f"  {RED}[!] Error: {err}{R}")
-                    continue
-                if not businesses:
-                    print(f"  {D}[!] Tidak ada hasil{R}")
                     continue
 
-                # Filter: hanya yang belum dikirim DAN punya nomor HP
-                new_targets = []
-                for b in businesses:
-                    ph = b["phone"].replace(" ","").replace("-","")
-                    if not ph or len(ph) < 8: continue
-                    if ph.startswith("0"): ph = "62" + ph[1:]
-                    elif not ph.startswith("62"): ph = "62" + ph
-                    if not is_sent(ph):
-                        b["phone_clean"] = ph
-                        new_targets.append(b)
+                # Cek WA masih connected
+                try:
+                    with open(STATUS_FILE) as f: st = json.load(f)
+                    if st.get("error") == "logged_out":
+                        print(f"\n  {Y}[!] Session logged out! Switch ke scrape-only mode...{R}")
+                        daemon_ready = False
+                        if wa_proc:
+                            wa_proc.terminate()
+                            wa_proc = None
+                        time.sleep(5)
+                        continue
+                except: pass
+            else:
+                # Cek apakah WA udah connect (auto-switch ke DM mode)
+                try:
+                    with open(STATUS_FILE) as f: st = json.load(f)
+                    if st.get("connected") and not st.get("error"):
+                        print(f"\n  {G}[✓] WA udah connect! Switch ke DM mode...{R}")
+                        wa_proc = subprocess.Popen(
+                            ["node", WA_SCRIPT, "daemon"],
+                            cwd=HOME,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        time.sleep(5)
+                        daemon_ready = True
+                        print(f"  {G}✓ WhatsApp daemon aktif! Mulai kirim DM...{R}")
 
-                if not new_targets:
-                    print(f"  {D}[!] Semua sudah dikirim, skip{R}")
-                    continue
+                        # Kirim target yang sudah di-scrape sebelumnya
+                        if all_targets:
+                            print(f"\n  {C}[*] Kirim {len(all_targets)} target yang sudah di-scrape...{R}")
+                            write_queue(all_targets[:5])  # Kirim 5 dulu
+                            all_targets = all_targets[5:]
+                            time.sleep(10)
+                except: pass
 
-                print(f"  {G}[✓] {len(new_targets)} target baru{R}")
+            cycle += 1
+            query, kota = LOCI[loc_idx % len(LOCI)]
+            loc_idx += 1
 
-                # Simpan ke CSV
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                fn = f"{query.replace(' ','_')}_{ts}.csv"
-                save_csv(new_targets, fn)
+            print(f"\n{'─'*50}")
+            mode = "SCRAPE+DM" if daemon_ready else "SCRAPE ONLY"
+            print(f"  {G}🔄 Cycle #{cycle} | {query} | [{mode}] | {time.strftime('%H:%M:%S')}{R}")
+            print(f"{'─'*50}")
 
-                # Kirim ke Baileys daemon via wa_queue.json
-                queue = read_queue() if os.path.exists(QUEUE_FILE) else []
+            # Scrape batch kecil
+            coords = COUNTRY_COORDS.get(kota, (-6.2, 106.8, 12, "en", "id"))
+            businesses, err = scrape_grid(query, max_results=BATCH_SIZE,
+                lat=coords[0], lng=coords[1], zoom=coords[2], lang=coords[3], gl=coords[4])
+
+            if err:
+                _play_sound("error")
+                print(f"  {RED}[!] Scrape error: {err}{R}")
+                time.sleep(10)
+                continue
+
+            if not businesses:
+                print(f"  {D}[!] Tidak ada hasil{R}")
+                time.sleep(5)
+                continue
+
+            # Filter: belum dikirim + punya nomor
+            new_targets = []
+            for b in businesses:
+                ph = b["phone"].replace(" ","").replace("-","").replace("+","")
+                if not ph or len(ph) < 8: continue
+                if ph.startswith("0"): ph = "62" + ph[1:]
+                elif not ph.startswith("62") and not ph.startswith("1"): ph = "62" + ph
+                if not is_sent(ph) and len(ph) >= 10:
+                    b["phone_clean"] = ph
+                    new_targets.append(b)
+
+            if not new_targets:
+                print(f"  {D}[!] Semua sudah dikirim, skip{R}")
+                time.sleep(3)
+                continue
+
+            total_scraped += len(new_targets)
+            _play_sound("ding")
+            print(f"  {G}[✓] {len(new_targets)} target baru ditemukan (total: {total_scraped}){R}")
+
+            # Simpan CSV
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            fn = f"{query.replace(' ','_')}_{ts}.csv"
+            save_csv(new_targets, fn)
+
+            # Export PDF ke storage
+            pdf_fn = f"ASTRAL_{query.replace(' ','_')}_{ts}.pdf"
+            pdf_path = _export_pdf(new_targets, pdf_fn)
+            if pdf_path:
+                _play_sound("tick")
+                print(f"  {G}[✓] PDF: {pdf_path}{R}")
+
+            if daemon_ready:
+                # DM langsung
+                queue = []
                 for b in new_targets:
                     lang = b.get("lang", "en")
                     queue.append({
@@ -1783,20 +2297,56 @@ def flow_scrape_auto_dm():
                         "lang": lang,
                     })
                 write_queue(queue)
-                print(f"  {G}[✓] Queue: {len(queue)} target{R}")
+                print(f"  {C}[*] Queue: {len(queue)} target. Menunggu DM...{R}")
 
-                # Delay antar kota
-                time.sleep(random.randint(3, 5))
+                # Tunggu queue kosong
+                max_wait = 300
+                waited = 0
+                while waited < max_wait:
+                    time.sleep(15)
+                    waited += 15
+                    try:
+                        with open(QUEUE_FILE) as f: q = json.load(f)
+                    except: q = []
 
-            print(f"\n  {C}[*] Cycle #{cycle} selesai. Lanjut...{R}")
-            time.sleep(10)
+                    if len(q) == 0:
+                        _play_sound("success")
+                        print(f"  {G}✓ Semua DM terkirim!{R}")
+                        total_sent += len(new_targets)
+                        break
+                    else:
+                        print(f"  {D}  ... {len(q)} masih di queue ({waited}s){R}")
+
+                if waited >= max_wait:
+                    print(f"  {Y}[!] Timeout queue, lanjut...{R}")
+
+                # Delay antar batch
+                delay = random.randint(10, 20)
+                print(f"  {D}⏳ Delay {delay}s sebelum batch berikutnya...{R}")
+                time.sleep(delay)
+            else:
+                # Scrape only: simpan targets untuk DM nanti
+                for b in new_targets:
+                    lang = b.get("lang", "en")
+                    all_targets.append({
+                        "name": b["name"],
+                        "phone": b["phone_clean"],
+                        "address": b.get("address", ""),
+                        "lang": lang,
+                    })
+                print(f"  {D}📦 Disimpan untuk DM nanti (total antrian: {len(all_targets)}){R}")
+                time.sleep(3)
 
     except KeyboardInterrupt:
         print(f"\n  {D}Dihentikan.{R}")
     finally:
+        write_queue([])
         if wa_proc:
             wa_proc.terminate()
             print(f"  {D}WhatsApp daemon dihentikan.{R}")
+        print(f"\n  {C}📊 Total: {total_scraped} di-scrape, {total_sent} DM terkirim{R}")
+        if all_targets:
+            print(f"  {Y}📦 {len(all_targets)} target tersimpan untuk DM berikutnya{R}")
     input(f"\n  {D}Tekan Enter untuk kembali...{R}")
 
 # ──────────────────────────────────────────────────────────────
@@ -1833,6 +2383,12 @@ def flow_scrape():
     fp = save_csv(businesses, fn)
     print(f"  {G}[✓] Tersimpan: {fp}{R}")
 
+    # Export PDF ke storage
+    pdf_fn = f"ASTRAL_{query.replace(' ','_')}_{ts}.pdf"
+    pdf_path = _export_pdf(businesses, pdf_fn)
+    if pdf_path:
+        print(f"  {G}[✓] PDF: {pdf_path}{R}")
+
     print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
     print(box_line("[1] Kirim WhatsApp DM", f"{B}{G}"))
     print(box_line("[2] Kembali ke menu", D))
@@ -1843,28 +2399,228 @@ def flow_scrape():
     input(f"\n  {D}Tekan Enter untuk kembali...{R}")
 
 # ──────────────────────────────────────────────────────────────
+#  API SETTINGS
+# ──────────────────────────────────────────────────────────────
+
+def flow_api_settings():
+    """Kelola API key SerpApi: tambah, hapus, list, test"""
+    global SERP_API_KEYS, SERP_API_KEY
+
+    while True:
+        clear(); rainbow_banner()
+        print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
+        print(box_line("SETTING API", f"{B}{G}"))
+        print(box_line(""))
+        print(box_line("SerpApi Multi-Key Fallback", C))
+        print(box_line("Kalau key 1 limit, otomatis pakai key 2, dst", D))
+        print(box_line(""))
+
+        # Tampilkan semua keys
+        keys = _load_api_keys()
+        if keys:
+            print(box_line(f"Total key: {len(keys)}", C))
+            for i, k in enumerate(keys):
+                masked = k[:8] + "..." + k[-6:] if len(k) > 20 else k
+                active = " ✓ active" if k == SERP_API_KEY else ""
+                print(box_line(f"  [{i+1}] {masked}{active}", Y if k == SERP_API_KEY else D))
+        else:
+            print(box_line(f"  {Y}[!] Belum ada API key{R}"))
+        print(box_line(""))
+
+        # Status usage
+        print(box_line(f"Quota per key: 100 pencarian/bulan", D))
+        print(box_line(f"Auto fallback: key limit → pakai key berikutnya", D))
+        print(box_line(""))
+        print(box_line("[1] Tambah API key baru", Y))
+        print(box_line("[2] Hapus API key", Y))
+        print(box_line("[3] Test semua key", Y))
+        print(box_line("[4] Set active key", Y))
+        print(box_line("[0] Kembali", D))
+        print(f"  {B}{M}+{'='*WIDTH}+{R}\n")
+
+        ch = input(f"  {G}▸ Pilih: {R}").strip()
+
+        if ch == "1":
+            _add_api_key()
+        elif ch == "2":
+            _remove_api_key()
+        elif ch == "3":
+            _test_api_keys()
+        elif ch == "4":
+            _set_active_key()
+        elif ch == "0":
+            return
+
+def _add_api_key():
+    """Tambah API key baru"""
+    global SERP_API_KEYS, SERP_API_KEY
+    clear(); rainbow_banner()
+    print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
+    print(box_line("TAMBAH API KEY", f"{B}{G}"))
+    print(box_line(""))
+    print(box_line("Dapatkan key gratis di:", Y))
+    print(box_line("  https://serpapi.com/manage-api-key", D))
+    print(box_line(""))
+    print(box_line("Free tier: 100 pencarian/bulan", D))
+    print(box_line("Tip: daftar banyak akun = banyak key gratis!", D))
+    print(f"  {B}{M}+{'='*WIDTH}+{R}\n")
+
+    key = input(f"  {G}▸ Masukkan API key: {R}").strip()
+    if not key:
+        print(f"  {RED}[!] Kosong.{R}")
+        time.sleep(1); return
+
+    keys = _load_api_keys()
+    if key in keys:
+        print(f"  {Y}[!] Key sudah ada.{R}")
+        time.sleep(1); return
+
+    keys.append(key)
+    _save_api_keys(keys)
+    SERP_API_KEYS = keys
+    SERP_API_KEY = keys[0]
+    print(f"  {G}[✓] Key ditambahkan! Total: {len(keys)} key{R}")
+    input(f"\n  {D}Tekan Enter untuk kembali...{R}")
+
+def _remove_api_key():
+    """Hapus API key"""
+    global SERP_API_KEYS, SERP_API_KEY
+    keys = _load_api_keys()
+    if not keys:
+        print(f"  {Y}[!] Tidak ada key.{R}")
+        time.sleep(1); return
+
+    clear(); rainbow_banner()
+    print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
+    print(box_line("HAPUS API KEY", f"{B}{G}"))
+    print(box_line(""))
+
+    for i, k in enumerate(keys):
+        masked = k[:8] + "..." + k[-6:] if len(k) > 20 else k
+        print(box_line(f"  [{i+1}] {masked}", Y))
+    print(box_line(""))
+    print(box_line("[0] Batal", D))
+    print(f"  {B}{M}+{'='*WIDTH}+{R}\n")
+
+    ch = input(f"  {G}▸ Nomor key: {R}").strip()
+    if ch == "0" or not ch:
+        return
+
+    try:
+        idx = int(ch) - 1
+        if 0 <= idx < len(keys):
+            removed = keys.pop(idx)
+            _save_api_keys(keys)
+            SERP_API_KEYS = keys
+            SERP_API_KEY = keys[0] if keys else None
+            print(f"  {G}[✓] Key dihapus! Sisa: {len(keys)} key{R}")
+        else:
+            print(f"  {RED}[!] Nomor invalid.{R}")
+    except ValueError:
+        print(f"  {RED}[!] Input invalid.{R}")
+    time.sleep(1)
+
+def _test_api_keys():
+    """Test semua key SerpApi"""
+    keys = _load_api_keys()
+    if not keys:
+        print(f"  {Y}[!] Tidak ada key.{R}")
+        time.sleep(1); return
+
+    clear(); rainbow_banner()
+    print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
+    print(box_line("TEST API KEY", f"{B}{G}"))
+    print(box_line(""))
+
+    for i, key in enumerate(keys):
+        masked = key[:8] + "..." + key[-6:] if len(key) > 20 else key
+        print(box_line(f"  Testing [{i+1}] {masked}...", C), end="", flush=True)
+
+        try:
+            resp = requests.get("https://serpapi.com/account", params={"api_key": key}, timeout=10)
+            data = resp.json()
+            plan = data.get("plan", "unknown")
+            quota = data.get("total_searches_left", "?")
+            used = data.get("total_searches", "?")
+            print(f"\r  {G}[✓] [{i+1}] Plan: {plan} | Sisa: {quota} | Terpakai: {used}     {R}")
+        except Exception as e:
+            print(f"\r  {RED}[✗] [{i+1}] Error: {e}     {R}")
+
+    print()
+    input(f"  {D}Tekan Enter untuk kembali...{R}")
+
+def _set_active_key():
+    """Set key aktif"""
+    global SERP_API_KEY
+    keys = _load_api_keys()
+    if not keys:
+        print(f"  {Y}[!] Tidak ada key.{R}")
+        time.sleep(1); return
+
+    clear(); rainbow_banner()
+    print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
+    print(box_line("SET ACTIVE KEY", f"{B}{G}"))
+    print(box_line(""))
+    print(box_line("Key aktif = key pertama yang dipakai", D))
+    print(box_line("Kalau limit, otomatis fallback ke key berikutnya", D))
+    print(box_line(""))
+
+    for i, k in enumerate(keys):
+        masked = k[:8] + "..." + k[-6:] if len(k) > 20 else k
+        active = " ← active" if k == SERP_API_KEY else ""
+        print(box_line(f"  [{i+1}] {masked}{active}", Y if k == SERP_API_KEY else D))
+    print(box_line(""))
+    print(box_line("[0] Batal", D))
+    print(f"  {B}{M}+{'='*WIDTH}+{R}\n")
+
+    ch = input(f"  {G}▸ Nomor key: {R}").strip()
+    if ch == "0" or not ch:
+        return
+
+    try:
+        idx = int(ch) - 1
+        if 0 <= idx < len(keys):
+            SERP_API_KEY = keys[idx]
+            print(f"  {G}[✓] Active key diubah!{R}")
+        else:
+            print(f"  {RED}[!] Nomor invalid.{R}")
+    except ValueError:
+        print(f"  {RED}[!] Input invalid.{R}")
+    time.sleep(1)
+
+# ──────────────────────────────────────────────────────────────
 #  MAIN
 # ──────────────────────────────────────────────────────────────
 
 def main():
-    clear(); print(); loading(); time.sleep(0.3)
-    for _ in range(3):
-        for color in FLASH:
-            clear(); flash_banner(color); time.sleep(0.15)
-
     os.makedirs(DATA_DIR, exist_ok=True)
+
+    # License check
+    if not _show_license_screen():
+        sys.exit(0)
+
+    # First time setup (API key)
+    if not _first_time_setup():
+        sys.exit(1)
+
+    clear(); print(); loading(); time.sleep(0.3)
+
+    # Typewriter banner animation
+    _banner_typewriter()
 
     flows = {
         0: flow_scrape_auto_dm,
         1: flow_settings,
+        2: flow_api_settings,
     }
 
     while True:
         choice = menu_select()
-        if choice == -1 or choice == 2:
+        if choice == -1 or choice == 3:
             clear(); rainbow_banner(); print(f"\n  {D}Bye!{R}\n"); sys.exit(0)
         if choice in flows:
             flows[choice]()
+            clear(); rainbow_banner()  # Clear setelah kembali dari submenu
 
 if __name__ == "__main__":
     main()
