@@ -1523,36 +1523,36 @@ def scrape_grid(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us"
                         "api_key": api_key,
                     }
                     resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
-                data = resp.json()
-                if "local_results" in data:
-                    for r in data["local_results"]:
-                        name = r.get("title", "")
-                        phone = r.get("phone", "")
-                        address = r.get("address", "")
-                        rating = r.get("rating", "")
-                        reviews = r.get("reviews", "")
-                        website = r.get("website", "")
-                        category = r.get("type", "")
-                        _add(name, phone=phone, address=address, rating=rating,
-                             reviews=reviews, website=website, category=category)
-                    # Get next pages
-                    if "serpapi_pagination" in data:
-                        next_pages = data["serpapi_pagination"].get("other_pages", {})
-                        for page_url in list(next_pages.values())[:1]:
-                            try:
-                                resp2 = requests.get(page_url, timeout=20)
-                                data2 = resp2.json()
-                                if "local_results" in data2:
-                                    for r in data2["local_results"]:
-                                        _add(r.get("title",""), phone=r.get("phone",""),
-                                             address=r.get("address",""), rating=r.get("rating",""),
-                                             reviews=r.get("reviews",""), website=r.get("website",""),
-                                             category=r.get("type",""))
-                                time.sleep(0.3)
-                            except: break
-                    time.sleep(0.5)
-                    key_used = True
-                    break  # Key worked, stop trying others
+                    data = resp.json()
+                    if "local_results" in data:
+                        for r in data["local_results"]:
+                            name = r.get("title", "")
+                            phone = r.get("phone", "")
+                            address = r.get("address", "")
+                            rating = r.get("rating", "")
+                            reviews = r.get("reviews", "")
+                            website = r.get("website", "")
+                            category = r.get("type", "")
+                            _add(name, phone=phone, address=address, rating=rating,
+                                 reviews=reviews, website=website, category=category)
+                        # Get next pages
+                        if "serpapi_pagination" in data:
+                            next_pages = data["serpapi_pagination"].get("other_pages", {})
+                            for page_url in list(next_pages.values())[:1]:
+                                try:
+                                    resp2 = requests.get(page_url, timeout=20)
+                                    data2 = resp2.json()
+                                    if "local_results" in data2:
+                                        for r in data2["local_results"]:
+                                            _add(r.get("title",""), phone=r.get("phone",""),
+                                                 address=r.get("address",""), rating=r.get("rating",""),
+                                                 reviews=r.get("reviews",""), website=r.get("website",""),
+                                                 category=r.get("type",""))
+                                    time.sleep(0.3)
+                                except: break
+                        time.sleep(0.5)
+                        key_used = True
+                        break  # Key worked, stop trying others
                 except:
                     continue  # This key failed, try next
             if not key_used:
@@ -1567,17 +1567,17 @@ def scrape_grid(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us"
                         is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
                         if not is_t: continue
                         if _check_has_website(sr["website"]):
-                        stats["has_website"] += 1; continue
-                    businesses.append({
-                        "name": sr["name"], "phone": "", "address": sr["address"],
-                        "rating": str(sr.get("rating","")), "reviews": str(sr.get("reviews","")),
-                        "website": sr["website"], "category": sr.get("category",""),
-                        "lang": det_lang, "place_id": sr["place_id"],
-                        "lat": sr["lat"], "lng": sr["lng"], "snippet": "",
-                    })
-                    seen_names.add(key)
-                time.sleep(0.3)
-            except: continue
+                            stats["has_website"] += 1; continue
+                        businesses.append({
+                            "name": sr["name"], "phone": "", "address": sr["address"],
+                            "rating": str(sr.get("rating","")), "reviews": str(sr.get("reviews","")),
+                            "website": sr["website"], "category": sr.get("category",""),
+                            "lang": det_lang, "place_id": sr["place_id"],
+                            "lat": sr["lat"], "lng": sr["lng"], "snippet": "",
+                        })
+                        seen_names.add(key)
+                    time.sleep(0.3)
+                except: continue
 
     # Enrich phones for tbm=map results without phone
     need_enrich = [b for b in businesses if not b.get("phone") and b.get("place_id")]
