@@ -32,6 +32,7 @@ HOME = os.path.expanduser("~")
 DATA_DIR = os.path.join(HOME, "astral_data")
 WA_SCRIPT = os.path.join(HOME, "astral_wa.js")
 STATUS_FILE = os.path.join(DATA_DIR, "wa_status.json")
+QUEUE_FILE = os.path.join(DATA_DIR, "wa_queue.json")
 WIDTH = 47
 
 MENU = [
