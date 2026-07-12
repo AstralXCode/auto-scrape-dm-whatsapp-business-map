@@ -76,19 +76,11 @@ def _get_device_id():
     except:
         return "default"
 
-def _generate_license_key(device_id, expiry_days=365):
-    """Generate license key (run this on seller side)"""
-    import hashlib
-    secret = "ASTRAL_X7K9M2"
-    raw = f"{device_id}:{secret}:{expiry_days}"
-    key = hashlib.sha256(raw.encode()).hexdigest()[:16].upper()
-    return f"ASTRAL-{key[:4]}-{key[4:8]}-{key[8:12]}-{key[12:]}"
-
 def _verify_license(key, device_id):
     """Verify license key"""
     import hashlib
     secret = "ASTRAL_X7K9M2"
-    for days in [365, 30, 7]:
+    for days in [365, 180, 90, 60, 30, 14, 7, 3, 1]:
         raw = f"{device_id}:{secret}:{days}"
         expected = hashlib.sha256(raw.encode()).hexdigest()[:16].upper()
         expected_fmt = f"ASTRAL-{expected[:4]}-{expected[4:8]}-{expected[8:12]}-{expected[12:]}"
@@ -132,62 +124,146 @@ def _check_license():
         else:
             return False, True, 0  # Trial expired
 
-    # First run: start trial
-    _save_license({
-        "type": "trial",
-        "start_ts": time.time(),
-        "device_id": device_id,
-    })
-    return True, True, TRIAL_DAYS
+    # No license at all - return False so setup can ask
+    return False, False, 0
 
 def _first_time_setup():
     """Setup wizard untuk pertama kali"""
+    lic_valid, lic_trial, lic_days = _check_license()
+
+    # Cek apakah sudah ada API key
     keys = _load_api_keys()
-    if keys:
-        return True  # Sudah ada API key
 
-    clear()
-    print()
-    for l in BANNER: print(f"  {rainbow_line(l)}")
-    print()
-    print(f"  {Y}┌─────────────────────────────────────────┐{R}")
-    print(f"  {Y}│  SETUP PERTAMA KALI                    │{R}")
-    print(f"  {Y}│  Masukkan API key SerpApi Anda          │{R}")
-    print(f"  {Y}└─────────────────────────────────────────┘{R}")
-    print()
-    print(f"  {C}Dapatkan API key GRATIS di:{R}")
-    print(f"  {D}https://serpapi.com/manage-api-key{R}")
-    print(f"  {D}Free tier: 100 pencarian/bulan{R}")
-    print()
-    print(f"  {D}Tip: Daftar banyak akun = banyak key gratis!{R}")
-    print()
+    # Jika license full (bukan trial), langsung ke API key
+    if lic_valid and not lic_trial:
+        if keys:
+            return True  # Sudah lengkap
+        # Lanjut ke API key setup di bawah
+    elif lic_trial and lic_days > 0:
+        # Trial aktif, tapi tetap tawarkan upgrade ke full
+        pass
+    else:
+        # Belum ada license sama sekali
+        pass
 
-    while True:
-        key = input(f"  {G}▸ Masukkan SerpApi key: {R}").strip()
-        if not key:
-            print(f"  {RED}[!] Kosong.{R}")
-            continue
+    # Tampilkan license screen SELALU kecuali sudah full + ada API key
+    if not (lic_valid and not lic_trial and keys):
+        clear()
+        print()
+        for l in BANNER: print(f"  {rainbow_line(l)}")
+        print()
+        device_id = _get_device_id()
 
-        # Verify key works
-        print(f"  {C}[*] Verifikasi key...{R}")
-        try:
-            import requests
-            resp = requests.get("https://serpapi.com/account",
-                              params={"api_key": key}, timeout=10)
-            data = resp.json()
-            if "plan" in data:
-                print(f"  {G}[✓] Key valid! Plan: {data.get('plan', 'free')}{R}")
-                _save_api_keys([key])
-                time.sleep(1)
-                return True
+        if lic_valid and lic_trial and lic_days > 0:
+            # Sudah trial, tawarkan upgrade
+            print(f"  {Y}┌─────────────────────────────────────────┐{R}")
+            print(f"  {Y}│  TRIAL AKTIF - {lic_days:.1f} hari tersisa          │{R}")
+            print(f"  {Y}└─────────────────────────────────────────┘{R}")
+            print()
+            print(f"  {D}Device ID kamu:{R} {G}{device_id}{R}")
+            print()
+            print(f"  {C}[1]{R} Upgrade ke full license")
+            print(f"  {C}[2]{R} Lanjut dengan trial")
+            print()
+            ch = input(f"  {G}▸ Pilih: {R}").strip()
+
+            if ch == "1":
+                while True:
+                    key = input(f"  {G}▸ Masukkan license key: {R}").strip().upper()
+                    if not key:
+                        print(f"  {RED}[!] Kosong.{R}")
+                        continue
+                    if _verify_license(key, device_id):
+                        _activate_license(key)
+                        print(f"  {G}[✓] License activated!{R}")
+                        time.sleep(1)
+                        break
+                    else:
+                        print(f"  {RED}[!] License key tidak valid.{R}")
+                        print(f"  {D}Kirim Device ID ke penjual untuk generate key{R}")
+        else:
+            # Belum ada license
+            print(f"  {Y}┌─────────────────────────────────────────┐{R}")
+            print(f"  {Y}│  AKTIVASI LICENSE                       │{R}")
+            print(f"  {Y}└─────────────────────────────────────────┘{R}")
+            print()
+            print(f"  {D}Device ID kamu:{R} {G}{device_id}{R}")
+            print()
+            print(f"  {C}[1]{R} Masukkan license key dari penjual")
+            print(f"  {C}[2]{R} Mulai trial GRATIS 3 hari")
+            print()
+            ch = input(f"  {G}▸ Pilih: {R}").strip()
+
+            if ch == "1":
+                while True:
+                    key = input(f"  {G}▸ Masukkan license key: {R}").strip().upper()
+                    if not key:
+                        print(f"  {RED}[!] Kosong.{R}")
+                        continue
+                    if _verify_license(key, device_id):
+                        _activate_license(key)
+                        print(f"  {G}[✓] License activated!{R}")
+                        time.sleep(1)
+                        break
+                    else:
+                        print(f"  {RED}[!] License key tidak valid.{R}")
+                        print(f"  {D}Kirim Device ID ke penjual untuk generate key{R}")
             else:
-                print(f"  {RED}[!] Key tidak valid. Coba lagi.{R}")
-        except Exception as e:
-            print(f"  {RED}[!] Error verifikasi: {e}{R}")
-            print(f"  {D}Simpan key anyway? (y/n){R}")
-            if input(f"  {G}▸ {R}").strip().lower() == "y":
-                _save_api_keys([key])
-                return True
+                _save_license({
+                    "type": "trial",
+                    "start_ts": time.time(),
+                    "device_id": device_id,
+                })
+                print(f"  {G}[✓] Trial 3 hari dimulai!{R}")
+                time.sleep(1)
+
+    # Cek API key
+    if not keys:
+        clear()
+        print()
+        for l in BANNER: print(f"  {rainbow_line(l)}")
+        print()
+        print(f"  {Y}┌─────────────────────────────────────────┐{R}")
+        print(f"  {Y}│  SETUP API KEY                          │{R}")
+        print(f"  {Y}│  Masukkan API key SerpApi Anda          │{R}")
+        print(f"  {Y}└─────────────────────────────────────────┘{R}")
+        print()
+        print(f"  {C}Dapatkan API key GRATIS di:{R}")
+        print(f"  {D}https://serpapi.com/manage-api-key{R}")
+        print(f"  {D}Free tier: 100 pencarian/bulan{R}")
+        print()
+        print(f"  {D}Tip: Daftar banyak akun = banyak key gratis!{R}")
+        print()
+
+        while True:
+            api_key = input(f"  {G}▸ Masukkan SerpApi key: {R}").strip()
+            if not api_key:
+                print(f"  {RED}[!] Kosong.{R}")
+                continue
+
+            # Verify key works
+            print(f"  {C}[*] Verifikasi key...{R}")
+            try:
+                import requests
+                resp = requests.get("https://serpapi.com/account",
+                                  params={"api_key": api_key}, timeout=10)
+                data = resp.json()
+                if "plan_name" in data or "account_id" in data:
+                    plan = data.get('plan_name', data.get('plan', 'free'))
+                    print(f"  {G}[✓] Key valid! Plan: {plan}{R}")
+                    _save_api_keys([api_key])
+                    time.sleep(1)
+                    return True
+                else:
+                    print(f"  {RED}[!] Key tidak valid. Coba lagi.{R}")
+            except Exception as e:
+                print(f"  {RED}[!] Error verifikasi: {e}{R}")
+                print(f"  {D}Simpan key anyway? (y/n){R}")
+                if input(f"  {G}▸ {R}").strip().lower() == "y":
+                    _save_api_keys([api_key])
+                    return True
+
+    return True
 
 def _activate_license(key):
     """Activate full license"""
@@ -279,7 +355,7 @@ def _export_pdf(businesses, filename="businesses.pdf"):
             font_path = p
             break
 
-    if os.path.exists(font_path):
+    if font_path and os.path.exists(font_path):
         pdf.add_font("DejaVu", "", font_path, uni=True)
         bold_path = font_path.replace("DejaVuSans.ttf", "DejaVuSans-Bold.ttf")
         if os.path.exists(bold_path):
@@ -341,11 +417,6 @@ def rainbow_banner():
     for i, ch in enumerate(SUBTITLE):
         out += ch if ch==" " else f"{RAINBOW[(i+10)%len(RAINBOW)]}{ch}{R}"
     print(out)
-
-def flash_banner(color):
-    print()
-    for l in BANNER: print(f"  {color}{l}{R}")
-    print(f"\n  {color}{SUBTITLE}{R}")
 
 def _banner_typewriter():
     """Animasi typewriter untuk ASCII art + subtitle"""
@@ -458,37 +529,6 @@ def print_menu(sel, typewriter_idx=-1):
             print(box_line(f"    {desc}", c))
 
         if i < len(MENU)-1: print(box_line(""))
-    print(box_line(""))
-    print(box_line("↑/↓ pilih  Enter OK  q keluar", D))
-    print(f"  {B}{M}+{'='*WIDTH}+{R}")
-
-def _menu_initial_load():
-    """Menu pertama kali: typewriter effect per item"""
-    print()
-    print(f"  {B}{M}+{'='*WIDTH}+{R}")
-
-    for i, (name, desc) in enumerate(MENU):
-        c = f"{B}{G}" if i==0 else D
-        tag = "[●]" if i==0 else "[○]"
-
-        # Typewriter untuk item pertama (selected)
-        if i == 0:
-            for ci in range(len(name)):
-                display = name[:ci+1]
-                pad = WIDTH - len(f"{tag} {name}") - 4
-                sys.stdout.write(f"\r  {c}|  {tag} {display}{' '*max(pad - len(display), 0)}|{R}\n")
-                sys.stdout.flush()
-                sys.stdout.write(f"\033[F")  # Move cursor up
-                _bell()
-                time.sleep(0.02)
-            # Final
-            sys.stdout.write(f"\r  {c}|  {tag} {name}{' '*max(pad, 0)}|{R}\n")
-        else:
-            print(box_line(f"{tag} {name}", c))
-
-        print(box_line(f"    {desc}"))
-        if i < len(MENU)-1: print(box_line(""))
-
     print(box_line(""))
     print(box_line("↑/↓ pilih  Enter OK  q keluar", D))
     print(f"  {B}{M}+{'='*WIDTH}+{R}")
@@ -1470,17 +1510,19 @@ def scrape_grid(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us"
         if len(businesses) >= max_results:
             break
 
-        # SerpApi for this cell
-        if SERP_API_KEY:
-            try:
-                params = {
-                    "engine": "google_maps",
-                    "q": query,
-                    "ll": f"@{cell_lat},{cell_lng},{zoom}z",
-                    "type": "search",
-                    "api_key": SERP_API_KEY,
-                }
-                resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+        # SerpApi for this cell with multi-key fallback
+        if SERP_API_KEYS:
+            key_used = False
+            for api_key in SERP_API_KEYS:
+                try:
+                    params = {
+                        "engine": "google_maps",
+                        "q": query,
+                        "ll": f"@{cell_lat},{cell_lng},{zoom}z",
+                        "type": "search",
+                        "api_key": api_key,
+                    }
+                    resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
                 data = resp.json()
                 if "local_results" in data:
                     for r in data["local_results"]:
@@ -1508,20 +1550,23 @@ def scrape_grid(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us"
                                              category=r.get("type",""))
                                 time.sleep(0.3)
                             except: break
-                time.sleep(0.5)
-            except: continue
-        else:
-            # tbm=map fallback
-            try:
-                search_url = _build_maps_search_url(query, cell_lat, cell_lng, zoom=zoom, lang=lang, gl=gl, page_size=20)
-                resp = requests.get(search_url, headers=headers, timeout=15)
-                search_results = _parse_maps_search_response(resp.text)
-                for sr in search_results:
-                    key = sr["name"].lower().strip()
-                    if key in seen_names: continue
-                    is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
-                    if not is_t: continue
-                    if _check_has_website(sr["website"]):
+                    time.sleep(0.5)
+                    key_used = True
+                    break  # Key worked, stop trying others
+                except:
+                    continue  # This key failed, try next
+            if not key_used:
+                # All keys failed, try tbm=map fallback
+                try:
+                    search_url = _build_maps_search_url(query, cell_lat, cell_lng, zoom=zoom, lang=lang, gl=gl, page_size=20)
+                    resp = requests.get(search_url, headers=headers, timeout=15)
+                    search_results = _parse_maps_search_response(resp.text)
+                    for sr in search_results:
+                        key = sr["name"].lower().strip()
+                        if key in seen_names: continue
+                        is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
+                        if not is_t: continue
+                        if _check_has_website(sr["website"]):
                         stats["has_website"] += 1; continue
                     businesses.append({
                         "name": sr["name"], "phone": "", "address": sr["address"],
@@ -1601,7 +1646,8 @@ def display_results(biz):
 #  WHATSAPP (via Baileys Node.js)
 # ──────────────────────────────────────────────────────────────
 
-def run_node(script, args=[], timeout=30):
+def run_node(script, args=None, timeout=30):
+    if args is None: args = []
     cmd = ["node", script] + args
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=HOME)
@@ -1853,7 +1899,7 @@ def flow_send():
     print(f"\n  {D}Gunakan {{name}} untuk nama bisnis{R}")
     print(f"  {D}Tekan Enter untuk pakai template default{R}\n")
     print(f"  {Y}Template default:{R}")
-    for line in DEFAULT_MSG.split("\\n"):
+    for line in DEFAULT_MSG.split("\n"):
         print(f"    {D}{line}{R}")
     print()
 
@@ -1864,7 +1910,7 @@ def flow_send():
     sample_name = "Restoran Sederhana"
     preview = msg.replace("{name}", sample_name).replace("{nama}", sample_name)
     print(f"\n  {Y}Preview ke '{sample_name}':{R}")
-    for line in preview.split("\\n")[:6]:
+    for line in preview.split("\n")[:6]:
         print(f"    {D}{line}{R}")
     print()
 
@@ -1888,59 +1934,6 @@ def flow_send():
     proc.wait()
     input(f"\n  {D}Tekan Enter untuk kembali...{R}")
 
-def flow_status():
-    clear(); rainbow_banner()
-    s = read_status()
-    print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
-    print(box_line("STATUS WHATSAPP", f"{B}{G}"))
-    print(box_line(""))
-
-    if not s:
-        print(box_line("Belum ada data status.", Y))
-        print(box_line("Jalankan pairing dulu.", D))
-    else:
-        conn = "✓ Terhubung" if s.get("connected") else "✗ Putus"
-        c = G if s.get("connected") else RED
-        print(box_line(f"Koneksi: {conn}", c))
-
-        if s.get("paired") or s.get("paired"): print(box_line("Status: Paired", G))
-        elif s.get("pairing"): print(box_line(f"Pairing code: {s.get('code','???')}", Y))
-        else: print(box_line("Status: Belum paired", Y))
-
-        if s.get("sending"):
-            print(box_line(f"Mengirim: {s.get('cur',0)}/{s.get('total',0)}", C))
-            print(box_line(f"Target: {s.get('target','')}", D))
-            print(box_line(f"OK: {s.get('ok',0)} | Gagal: {s.get('fail',0)}", D))
-        elif s.get("done"):
-            print(box_line(f"Selesai: {s.get('ok',0)} ok, {s.get('fail',0)} gagal", G))
-
-        if s.get("error"): print(box_line(f"Error: {s['error']}", RED))
-        if s.get("ts"): print(box_line(f"Update: {s['ts']}", D))
-
-    print(box_line(""))
-    print(f"  {B}{M}+{'='*WIDTH}+{R}")
-    input(f"\n  {D}Tekan Enter untuk kembali...{R}")
-
-def flow_daemon():
-    clear(); rainbow_banner()
-    print(f"\n  {B}{M}+{'='*WIDTH}+{R}")
-    print(box_line("MODE BOT 24/7 (DAEMON)", f"{B}{G}"))
-    print(box_line(""))
-    print(box_line("Bot akan jalan terus menerus", Y))
-    print(box_line("otomatis kirim dari wa_queue.json", Y))
-    print(box_line(""))
-    print(box_line("Untuk berhenti: tekan Ctrl+C", D))
-    print(f"  {B}{M}+{'='*WIDTH}+{R}\n")
-
-    confirm = input(f"  {G}▸ Jalankan daemon? (y/n): {R}").strip().lower()
-    if confirm != "y": print(f"  {D}Dibatalkan.{R}"); return
-
-    print(f"\n  {C}[*] Menjalankan Baileys daemon 24/7...{R}")
-    print(f"  {D}Tekan Ctrl+C untuk berhenti{R}\n")
-    try:
-        subprocess.run(["node", WA_SCRIPT, "daemon"], cwd=HOME)
-    except KeyboardInterrupt:
-        print(f"\n  {D}Daemon dihentikan.{R}")
     input(f"\n  {D}Tekan Enter untuk kembali...{R}")
 
 # ──────────────────────────────────────────────────────────────
@@ -2232,10 +2225,10 @@ def flow_scrape_auto_dm():
             query, kota = LOCI[loc_idx % len(LOCI)]
             loc_idx += 1
 
-            print(f"\n{'─'*50}")
+            print(f"\n{'─'*WIDTH}")
             mode = "SCRAPE+DM" if daemon_ready else "SCRAPE ONLY"
             print(f"  {G}🔄 Cycle #{cycle} | {query} | [{mode}] | {time.strftime('%H:%M:%S')}{R}")
-            print(f"{'─'*50}")
+            print(f"{'─'*WIDTH}")
 
             # Scrape batch kecil
             coords = COUNTRY_COORDS.get(kota, (-6.2, 106.8, 12, "en", "id"))
@@ -2256,10 +2249,13 @@ def flow_scrape_auto_dm():
             # Filter: belum dikirim + punya nomor
             new_targets = []
             for b in businesses:
-                ph = b["phone"].replace(" ","").replace("-","").replace("+","")
+                ph = b["phone"].replace(" ","").replace("-","").replace("+","").replace("(","").replace(")","")
                 if not ph or len(ph) < 8: continue
-                if ph.startswith("0"): ph = "62" + ph[1:]
-                elif not ph.startswith("62") and not ph.startswith("1"): ph = "62" + ph
+                # Clean: keep only digits, ensure starts with country code
+                ph = "".join(c for c in ph if c.isdigit())
+                if ph.startswith("0"):
+                    # Local number - skip (can't determine country)
+                    continue
                 if not is_sent(ph) and len(ph) >= 10:
                     b["phone_clean"] = ph
                     new_targets.append(b)

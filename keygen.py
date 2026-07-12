@@ -13,7 +13,7 @@ def gen_key(device_id, days=365):
     return f"ASTRAL-{key[:4]}-{key[4:8]}-{key[8:12]}-{key[12:]}"
 
 def verify(key, device_id):
-    for days in [365, 30, 7]:
+    for days in [365, 180, 90, 60, 30, 14, 7, 3, 1]:
         raw = f"{device_id}:{SECRET}:{days}"
         expected = hashlib.sha256(raw.encode()).hexdigest()[:16].upper()
         expected_fmt = f"ASTRAL-{expected[:4]}-{expected[4:8]}-{expected[8:12]}-{expected[12:]}"
