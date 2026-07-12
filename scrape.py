@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, os, time, itertools, random, json, re, csv, subprocess, termios, tty
+import sys, os, time, itertools, random, json, re, csv, subprocess, termios, tty, math
 
 RAINBOW = [
     "\033[38;5;196m","\033[38;5;202m","\033[38;5;208m","\033[38;5;214m",
@@ -33,6 +33,7 @@ DATA_DIR = os.path.join(HOME, "astral_data")
 WA_SCRIPT = os.path.join(HOME, "astral_wa.js")
 STATUS_FILE = os.path.join(DATA_DIR, "wa_status.json")
 QUEUE_FILE = os.path.join(DATA_DIR, "wa_queue.json")
+SERP_API_KEY = "0d794e5de5d87e239f66f842df25c59e8299d9585f655e6940cf2a7b84495e38"
 WIDTH = 47
 
 MENU = [
@@ -335,118 +336,164 @@ DM_TEMPLATES = {
     ),
 }
 
-# Global location queries (per region)
+# Global UMKM queries (specific small business types, not generic)
 GLOBAL_LOCATIONS = [
-    # Indonesia
-    ("toko", "Indonesia"), ("restoran", "Indonesia"), ("cafe", "Indonesia"),
-    ("laundry", "Indonesia"), ("bengkel", "Indonesia"), ("salon", "Indonesia"),
-    # Malaysia
-    ("kedai", "Malaysia"), ("restoran", "Malaysia"), ("kedai kopi", "Malaysia"),
-    # Philippines
-    ("tindahan", "Philippines"), ("restaurant", "Philippines"), ("carinderia", "Philippines"),
-    # Thailand
-    ("ร้าน", "Thailand"), ("ร้านอาหาร", "Thailand"), ("คาเฟ่", "Thailand"),
-    # Vietnam
-    ("cửa hàng", "Vietnam"), ("quán ăn", "Vietnam"), ("café", "Vietnam"),
-    # India
-    ("दुकान", "India"), ("restaurant", "India"), ("कैफे", "India"),
+    # Indonesia - warung/toko kecil
+    ("warung", "Indonesia"), ("toko kelontong", "Indonesia"), ("warung kopi", "Indonesia"),
+    ("laundry kiloan", "Indonesia"), ("bengkel motor", "Indonesia"), ("potong rambut", "Indonesia"),
+    ("tukang jahit", "Indonesia"), ("toko bangunan", "Indonesia"), ("apotek", "Indonesia"),
+    ("tokoh obat", "Indonesia"), ("warung makan", "Indonesia"), ("les privat", "Indonesia"),
+    ("service AC", "Indonesia"), ("toko hp", "Indonesia"), ("cuci mobil", "Indonesia"),
+    # Malaysia - kedai kecil
+    ("kedai runcit", "Malaysia"), ("kedai gunting", "Malaysia"), ("kedai basikal", "Malaysia"),
+    ("service motor", "Malaysia"), ("kedai kopi", "Malaysia"), ("restoran", "Malaysia"),
+    ("kedai ubat", "Malaysia"), ("kedai emas", "Malaysia"),
+    # Philippines - small shops
+    ("sari-sari store", "Philippines"), ("carinderia", "Philippines"), ("ukay-ukay", "Philippines"),
+    ("water refill", "Philippines"), ("vulcanizing shop", "Philippines"), ("computer shop", "Philippines"),
+    ("laundry shop", "Philippines"), ("mini grocery", "Philippines"),
+    # Thailand - ร้านเล็ก
+    ("ร้านซ่อม", "Thailand"), ("ร้านตัดผม", "Thailand"), ("ร้านขายยา", "Thailand"),
+    ("ร้านอาหารตามสั่ง", "Thailand"), ("ร้านกาแฟ", "Thailand"), ("ซักรีด", "Thailand"),
+    ("ร้านโชห่วย", "Thailand"), ("ร้านขายของชำ", "Thailand"),
+    # Vietnam - tiệm nhỏ
+    ("tiệm sửa xe", "Vietnam"), ("quán phở", "Vietnam"), ("tiệm cắt tóc", "Vietnam"),
+    ("quán nước", "Vietnam"), ("tiệm thuốc", "Vietnam"), ("tiệm giặt ủi", "Vietnam"),
+    ("quán nhậu", "Vietnam"), ("tiệm tạp hóa", "Vietnam"),
+    # India - choti dukan
+    ("kirana store", "India"), ("pan shop", "India"), ("tailor shop", "India"),
+    ("medical store", "India"), ("tea stall", "India"), ("cycle repair", "India"),
+    ("saloon", "India"), ("hardware store", "India"),
     # Pakistan
-    ("دکان", "Pakistan"), ("restaurant", "Pakistan"),
+    ("kirana", "Pakistan"), ("dukan", "Pakistan"), ("tailor", "Pakistan"),
+    ("medical store", "Pakistan"), ("tea shop", "Pakistan"),
     # Bangladesh
-    ("দোকান", "Bangladesh"), ("restaurant", "Bangladesh"),
-    # Sri Lanka
-    ("shop", "Sri Lanka"), ("restaurant", "Sri Lanka"),
-    # Nepal
-    ("पसल", "Nepal"), ("restaurant", "Nepal"),
-    # Myanmar
-    ("ဆိုင်", "Myanmar"), ("ресторан", "Myanmar"),
-    # Cambodia
-    ("ហាង", "Cambodia"), ("ភោជនីយដ្ឋាន", "Cambodia"),
-    # Laos
-    ("ຮ້ານ", "Laos"),
-    # China
-    ("商店", "China"), ("餐厅", "China"), ("咖啡", "China"),
-    # Japan
-    ("店", "Japan"), ("レストラン", "Japan"), ("カフェ", "Japan"),
-    # South Korea
-    ("가게", "South Korea"), ("식당", "South Korea"), ("카페", "South Korea"),
-    # Taiwan
-    ("商店", "Taiwan"), ("餐廳", "Taiwan"), ("咖啡", "Taiwan"),
-    # Hong Kong
-    ("商店", "Hong Kong"), ("餐廳", "Hong Kong"),
-    # Singapore
-    ("shop", "Singapore"), ("restaurant", "Singapore"), ("cafe", "Singapore"),
-    # Australia
-    ("shop", "Australia"), ("restaurant", "Australia"), ("cafe", "Australia"),
-    ("salon", "Australia"), ("gym", "Australia"), ("bakery", "Australia"),
-    # New Zealand
-    ("shop", "New Zealand"), ("restaurant", "New Zealand"), ("cafe", "New Zealand"),
-    # USA
-    ("shop", "USA"), ("restaurant", "USA"), ("cafe", "USA"), ("bakery", "USA"),
-    ("salon", "USA"), ("gym", "USA"), ("plumber", "USA"), ("electrician", "USA"),
-    ("cleaning", "USA"), ("landscaping", "USA"), ("painting", "USA"),
-    ("pizza", "USA"), ("taco", "USA"), ("sushi", "USA"), ("burger", "USA"),
-    ("florist", "USA"), ("boutique", "USA"), ("pet store", "USA"),
-    # Canada
-    ("shop", "Canada"), ("restaurant", "Canada"), ("cafe", "Canada"),
-    # UK
-    ("shop", "UK"), ("restaurant", "UK"), ("cafe", "UK"), ("pub", "UK"),
-    ("salon", "UK"), ("bakery", "UK"),
-    # Europe
-    ("shop", "Germany"), ("restaurant", "Germany"), ("cafe", "Germany"),
-    ("shop", "France"), ("restaurant", "France"), ("cafe", "France"),
-    ("shop", "Spain"), ("restaurant", "Spain"), ("cafe", "Spain"),
-    ("shop", "Italy"), ("restaurant", "Italy"), ("cafe", "Italy"),
-    ("shop", "Portugal"), ("restaurant", "Portugal"), ("cafe", "Portugal"),
-    ("shop", "Netherlands"), ("restaurant", "Netherlands"), ("cafe", "Netherlands"),
-    ("shop", "Belgium"), ("restaurant", "Belgium"), ("cafe", "Belgium"),
-    ("shop", "Poland"), ("restaurant", "Poland"), ("cafe", "Poland"),
-    ("shop", "Czech Republic"), ("restaurant", "Czech Republic"),
-    ("shop", "Austria"), ("restaurant", "Austria"), ("cafe", "Austria"),
-    ("shop", "Switzerland"), ("restaurant", "Switzerland"),
-    ("shop", "Sweden"), ("restaurant", "Sweden"), ("cafe", "Sweden"),
-    ("shop", "Norway"), ("restaurant", "Norway"), ("cafe", "Norway"),
-    ("shop", "Denmark"), ("restaurant", "Denmark"), ("cafe", "Denmark"),
-    ("shop", "Finland"), ("restaurant", "Finland"), ("cafe", "Finland"),
+    ("mudir dokan", "Bangladesh"), ("pharmacy", "Bangladesh"), ("tailor", "Bangladesh"),
+    ("tea stall", "Bangladesh"), ("hardware", "Bangladesh"),
     # Middle East
-    ("محل", "UAE"), ("مطعم", "UAE"), ("كافيه", "UAE"),
-    ("محل", "Saudi Arabia"), ("مطعم", "Saudi Arabia"),
-    ("محل", "Qatar"), ("مطعم", "Qatar"),
-    ("محل", "Kuwait"), ("مطعم", "Kuwait"),
-    ("محل", "Bahrain"), ("مطعم", "Bahrain"),
-    ("محل", "Oman"), ("مطعم", "Oman"),
-    # Africa
-    ("shop", "South Africa"), ("restaurant", "South Africa"), ("cafe", "South Africa"),
-    ("shop", "Nigeria"), ("restaurant", "Nigeria"), ("cafe", "Nigeria"),
-    ("shop", "Kenya"), ("restaurant", "Kenya"), ("cafe", "Kenya"),
-    ("shop", "Egypt"), ("restaurant", "Egypt"), ("cafe", "Egypt"),
-    ("shop", "Morocco"), ("restaurant", "Morocco"), ("cafe", "Morocco"),
-    ("shop", "Ghana"), ("restaurant", "Ghana"),
-    ("shop", "Tanzania"), ("restaurant", "Tanzania"),
-    ("shop", "Ethiopia"), ("restaurant", "Ethiopia"),
-    # Latin America
-    ("tienda", "Mexico"), ("restaurante", "Mexico"), ("cafe", "Mexico"),
-    ("tienda", "Brazil"), ("restaurante", "Brazil"), ("cafe", "Brazil"),
-    ("tienda", "Argentina"), ("restaurante", "Argentina"), ("cafe", "Argentina"),
-    ("tienda", "Colombia"), ("restaurante", "Colombia"), ("cafe", "Colombia"),
-    ("tienda", "Chile"), ("restaurante", "Chile"), ("cafe", "Chile"),
-    ("tienda", "Peru"), ("restaurante", "Peru"), ("cafe", "Peru"),
-    ("tienda", "Ecuador"), ("restaurante", "Ecuador"),
-    ("tienda", "Venezuela"), ("restaurante", "Venezuela"),
-    ("tienda", "Panama"), ("restaurante", "Panama"),
-    ("tienda", "Costa Rica"), ("restaurante", "Costa Rica"),
-    ("tienda", "Guatemala"), ("restaurante", "Guatemala"),
-    ("tienda", "Honduras"), ("restaurante", "Honduras"),
-    ("tienda", "El Salvador"), ("restaurante", "El Salvador"),
-    ("tienda", "Nicaragua"), ("restaurante", "Nicaragua"),
-    ("tienda", "Dominican Republic"), ("restaurante", "Dominican Republic"),
-    ("tienda", "Cuba"), ("restaurante", "Cuba"),
-    # Turkey
-    ("dukkan", "Turkey"), ("restoran", "Turkey"), ("kafe", "Turkey"),
-    # Russia
-    ("магазин", "Russia"), ("ресторан", "Russia"), ("кафе", "Russia"),
-    # Ukraine
-    ("магазин", "Ukraine"), ("ресторан", "Ukraine"), ("кафе", "Ukraine"),
+    ("محل صغير", "UAE"), ("محل خياطة", "UAE"), ("محل صيانة", "UAE"),
+    ("محل خضرة", "UAE"), ("بقالة", "Saudi Arabia"), ("محل صغير", "Saudi Arabia"),
+    ("خياط", "Saudi Arabia"), ("صيدلية", "Saudi Arabia"),
+    # Latin America - tiendas pequeñas
+    ("tlapaleria", "Mexico"), ("abarrotes", "Mexico"), ("taller mecánico", "Mexico"),
+    ("papelería", "Mexico"), ("farmacia", "Mexico"), ("lavandería", "Mexico"),
+    ("minisuper", "Mexico"), ("taquería", "Mexico"),
+    ("mercadinho", "Brazil"), ("barbearia", "Brazil"), ("lanchonete", "Brazil"),
+    ("oficina", "Brazil"), ("pet shop", "Brazil"), ("salão de beleza", "Brazil"),
+    ("kiosco", "Argentina"), ("rotisería", "Argentina"), ("carnicería", "Argentina"),
+    ("verdulería", "Argentina"), ("librería", "Argentina"),
+    ("tienda", "Colombia"), ("taller", "Colombia"), ("droguería", "Colombia"),
+    ("papelería", "Colombia"), ("sastrería", "Colombia"),
+    # Africa - small shops
+    ("spaza shop", "South Africa"), ("tuck shop", "South Africa"), ("hair salon", "South Africa"),
+    ("phone repair", "Nigeria"), ("provision store", "Nigeria"), ("barbing salon", "Nigeria"),
+    ("chemist", "Kenya"), ("dukka", "Kenya"), ("mpesa shop", "Kenya"),
+    # Turkey - küçük dükkan
+    ("bakkal", "Turkey"), ("berber", "Turkey"), ("terzi", "Turkey"),
+    ("eczane", "Turkey"), ("tamirhane", "Turkey"), ("çay bahçesi", "Turkey"),
+    # Russia - маленький магазин
+    ("продукты", "Russia"), ("парикмахерская", "Russia"), ("аптека", "Russia"),
+    ("автомастерская", "Russia"), ("школьный", "Russia"),
+    # Europe - small local shops
+    ("bäckerei", "Germany"), ("metzgerei", "Germany"), ("friseur", "Germany"),
+    ("boulangerie", "France"), ("boucherie", "France"), ("coiffeur", "France"),
+    ("panadería", "Spain"), ("carnicería", "Spain"), ("peluquería", "Spain"),
+    ("forno", "Italy"), ("macelleria", "Italy"), ("parrucchiere", "Italy"),
+    ("padaria", "Portugal"), ("barbearia", "Portugal"), ("serralharia", "Portugal"),
+    # Australia/NZ - local shops
+    ("milk bar", "Australia"), ("fish and chips", "Australia"), ("kebab shop", "Australia"),
+    ("bakery", "Australia"), ("hairdresser", "Australia"), ("chemist", "Australia"),
+    ("dairy", "New Zealand"), ("fish and chip shop", "New Zealand"), ("bakery", "New Zealand"),
+    # USA - small local businesses
+    ("convenience store", "USA"), ("laundromat", "USA"), ("barber shop", "USA"),
+    ("nail salon", "USA"), ("auto repair", "USA"), ("dry cleaner", "USA"),
+    ("liquor store", "USA"), ("check cashing", "USA"),
+    # ── Service businesses yang butuh website/aplikasi ──
+    # Foto & Video
+    ("studio foto", "Indonesia"), ("fotografer", "Indonesia"), ("videografer", "Indonesia"),
+    ("cetak foto", "Indonesia"), ("photo booth", "Indonesia"),
+    ("photo studio", "Malaysia"), ("photographer", "Philippines"),
+    ("photo studio", "Thailand"), (" nhiếp ảnh", "Vietnam"),
+    ("studio foto", "Mexico"), ("fotógrafo", "Argentina"), ("photographer", "USA"),
+    ("photo studio", "UK"), ("fotograf", "Germany"), ("fotógrafo", "Brazil"),
+    # Event & Wedding
+    ("wedding organizer", "Indonesia"), ("event organizer", "Indonesia"),
+    ("catering", "Indonesia"), ("dekorasi", "Indonesia"), ("mua", "Indonesia"),
+    ("wedding planner", "Malaysia"), ("event planner", "Philippines"),
+    ("แต่งงาน", "Thailand"), (" wedding organizer", "India"),
+    ("bodas", "Indonesia"), ("resepsi", "Indonesia"),
+    ("wedding organizer", "Mexico"), ("event planner", "USA"),
+    ("wedding planner", "UK"), ("event agentur", "Germany"),
+    # Salon & Kecantikan
+    ("salon kecantikan", "Indonesia"), ("skin care", "Indonesia"),
+    ("lash extension", "Indonesia"), ("nail art", "Indonesia"),
+    ("klinik kecantikan", "Indonesia"), ("barbershop", "Indonesia"),
+    ("beauty salon", "Malaysia"), ("nail salon", "Philippines"),
+    ("เสริมสวย", "Thailand"), ("beauty parlor", "India"),
+    ("salón de belleza", "Mexico"), ("esthetician", "USA"),
+    ("beauty salon", "UK"), ("kosmetikstudio", "Germany"),
+    # Fitness & Olahraga
+    ("gym", "Indonesia"), ("yoga studio", "Indonesia"),
+    ("personal trainer", "Indonesia"), ("fitness center", "Indonesia"),
+    ("crossfit", "Indonesia"), ("pilates", "Indonesia"),
+    ("gym", "Malaysia"), ("fitness", "Philippines"), ("ฟิตเนส", "Thailand"),
+    ("gym", "Mexico"), ("gimnasio", "Argentina"), ("gym", "USA"),
+    ("fitness studio", "UK"), ("fitnessstudio", "Germany"),
+    # Kursus & Pelatihan
+    ("kursus", "Indonesia"), ("bimbel", "Indonesia"), ("les privat", "Indonesia"),
+    ("training center", "Indonesia"), ("lembaga kursus", "Indonesia"),
+    ("tutor", "Malaysia"), ("cram school", "Philippines"),
+    ("โรงเรียนกวดวิชา", "Thailand"), ("coaching center", "India"),
+    ("academy", "Indonesia"), ("sekolah musik", "Indonesia"),
+    ("music school", "Malaysia"), ("dance studio", "Philippines"),
+    ("kursus", "Mexico"), ("academia", "Argentina"), ("tutoring", "USA"),
+    # Otomotif & Teknisi
+    ("bengkel cat", "Indonesia"), ("bengkel las", "Indonesia"),
+    ("tuned shop", "Indonesia"), ("custom shop", "Indonesia"),
+    ("speed shop", "Indonesia"), ("detailing mobil", "Indonesia"),
+    ("auto detailing", "Malaysia"), ("car wash", "Philippines"),
+    ("อู่ซ่อมรถ", "Thailand"), ("garage", "India"),
+    ("taller", "Mexico"), ("mechanic shop", "USA"),
+    ("workshop", "UK"), ("werkstatt", "Germany"),
+    # Properti & Real Estate
+    ("agen properti", "Indonesia"), ("konsultan properti", "Indonesia"),
+    ("perumahan", "Indonesia"), ("real estate", "Indonesia"),
+    ("property agent", "Malaysia"), ("real estate agent", "Philippines"),
+    ("นายหน้าอสังหา", "Thailand"), ("real estate", "India"),
+    ("inmobiliaria", "Mexico"), ("imobiliária", "Brazil"),
+    ("real estate agent", "USA"), ("estate agent", "UK"),
+    ("immobilien", "Germany"), ("agence immobilière", "France"),
+    # Konsultan & Profesional
+    ("konsultan", "Indonesia"), ("klinik hukum", "Indonesia"),
+    ("kantor notaris", "Indonesia"), ("akuntan", "Indonesia"),
+    ("konsultan pajak", "Indonesia"), ("management consulting", "Indonesia"),
+    ("lawyer", "Malaysia"), ("accountant", "Philippines"),
+    ("ทนายความ", "Thailand"), ("CA firm", "India"),
+    ("consultor", "Mexico"), ("advogado", "Brazil"),
+    ("consultant", "USA"), ("solicitor", "UK"),
+    ("berater", "Germany"), ("consultant", "France"),
+    # Travel & Tour
+    ("agen travel", "Indonesia"), ("tour travel", "Indonesia"),
+    ("paket wisata", "Indonesia"), ("rental mobil", "Indonesia"),
+    ("travel agent", "Malaysia"), ("tour operator", "Philippines"),
+    ("บริษัทท่องเที่ยว", "Thailand"), ("travel agent", "India"),
+    ("agencia de viajes", "Mexico"), ("agência de viagem", "Brazil"),
+    ("travel agency", "USA"), ("tour operator", "UK"),
+    ("reisebüro", "Germany"), ("agence de voyage", "France"),
+    # Gadget & Elektronik
+    ("service hp", "Indonesia"), ("service laptop", "Indonesia"),
+    ("toko aksesoris", "Indonesia"), ("counter pulsa", "Indonesia"),
+    ("phone repair", "Malaysia"), ("computer shop", "Philippines"),
+    ("ร้านซ่อม", "Thailand"), ("mobile repair", "India"),
+    ("celular", "Mexico"), ("cell phone repair", "USA"),
+    # Food & Beverage (spesifik)
+    ("cake shop", "Indonesia"), ("kue tart", "Indonesia"),
+    ("frozen food", "Indonesia"), ("katering", "Indonesia"),
+    ("cloud kitchen", "Indonesia"), ("ghost kitchen", "Indonesia"),
+    ("bakery", "Indonesia"), ("roti bakar", "Indonesia"),
+    ("bakery", "Malaysia"), ("boulangerie", "France"),
+    ("panadería", "Spain"), ("bäckerei", "Germany"),
+    ("patisserie", "UK"), ("bakery", "USA"),
 ]
 
 def detect_language(text):
@@ -734,11 +781,11 @@ def _parse_maps_place_detail(raw_text):
     return result
 
 def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us"):
-    """Scrape Google Maps using internal tbm=map API + place detail enrichment.
+    """Scrape Google Maps using SerpApi (primary) + tbm=map (fallback).
     
     Strategy:
-    1. Search via tbm=map → get businesses with place_ids, names, addresses
-    2. For each business, fetch /maps/preview/place → get phone, website, email
+    1. SerpApi Google Maps search → structured results with phones
+    2. Fallback: tbm=map search + place detail enrichment
     3. Filter: skip platforms, big brands, businesses with websites
     """
     try:
@@ -770,7 +817,11 @@ def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", 
         is_target, det_lang = _is_global_target(name, address, snippet)
         if not is_target:
             stats["not_target"] += 1; return
-        ph_clean = re.sub(r'[\s\-\(\)]', '', phone) if phone else ""
+        ph_clean = re.sub(r'[\s\-\(\)\+]', '', phone) if phone else ""
+        if ph_clean:
+            ph_digits = re.sub(r'\D', '', ph_clean)
+            if len(ph_digits) < 8 or len(ph_digits) > 15:
+                ph_clean = ""
         if ph_clean:
             ph_digits = re.sub(r'\D', '', ph_clean)
             if ph_digits in seen_phones:
@@ -784,62 +835,113 @@ def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", 
             "lang": det_lang, "snippet": snippet[:200] if snippet else "",
         })
 
-    # ── Step 1: Search via tbm=map ──
-    print(f"  {C}[1/2] Google Maps search...{R}")
-    try:
-        search_url = _build_maps_search_url(query, lat, lng, zoom=zoom, lang=lang, gl=gl, page_size=20)
-        resp = requests.get(search_url, headers=headers, timeout=15)
-        search_results = _parse_maps_search_response(resp.text)
-        print(f"    {D}→ {len(search_results)} hasil ditemukan{R}")
-
-        # Dedup from search
-        for sr in search_results:
-            key = sr["name"].lower().strip()
-            if key in seen_names: continue
-            for dom in PLATFORM_DOMAINS:
-                if dom in key: continue
-            is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
-            if not is_t: continue
-            if _check_has_website(sr["website"]):
-                stats["has_website"] += 1; continue
-            businesses.append({
-                "name": sr["name"], "phone": "", "address": sr["address"],
-                "rating": str(sr.get("rating","")), "reviews": str(sr.get("reviews","")),
-                "website": sr["website"], "category": sr.get("category",""),
-                "lang": det_lang, "place_id": sr["place_id"],
-                "lat": sr["lat"], "lng": sr["lng"], "snippet": "",
-            })
-            seen_names.add(key)
-    except Exception as e:
-        print(f"    {RED}→ Error search: {e}{R}")
-
-    # ── Step 2: Enrich via place detail ──
-    print(f"  {C}[2/2] Enriching phone numbers...{R}")
-    enriched = 0
-    no_phone = 0
-    for b in businesses[:40]:
-        pid = b.pop("place_id", "")
-        lat_v = b.pop("lat", 0)
-        lng_v = b.pop("lng", 0)
-        if not pid or not lat_v:
-            no_phone += 1; continue
-        if b["phone"]:
-            enriched += 1; continue
+    # ── Source 1: SerpApi (primary) ──
+    print(f"  {C}[1/3] SerpApi Google Maps search...{R}")
+    serp_count = 0
+    if SERP_API_KEY:
         try:
-            det_url = _build_maps_place_url(pid, lat_v, lng_v, lang=lang, gl=gl)
-            det_resp = requests.get(det_url, headers=headers, timeout=12)
-            detail = _parse_maps_place_detail(det_resp.text)
-            if detail["phone"] and _is_real_phone(detail["phone"]):
-                b["phone"] = detail["phone"]
-                enriched += 1
-            if detail["website"] and not b["website"]:
-                b["website"] = detail["website"]
-            time.sleep(0.3)
-        except:
-            no_phone += 1
-            continue
+            params = {
+                "engine": "google_maps",
+                "q": query,
+                "ll": f"@{lat},{lng},{zoom}z",
+                "type": "search",
+                "api_key": SERP_API_KEY,
+            }
+            resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+            data = resp.json()
+            if "local_results" in data:
+                for r in data["local_results"]:
+                    name = r.get("title", "")
+                    phone = r.get("phone", "")
+                    address = r.get("address", "")
+                    rating = r.get("rating", "")
+                    reviews = r.get("reviews", "")
+                    website = r.get("website", "")
+                    category = r.get("type", "")
+                    snippet = r.get("place_id_search", "")
+                    _add(name, phone=phone, address=address, rating=rating,
+                         reviews=reviews, website=website, category=category, snippet=snippet)
+                serp_count = len(data["local_results"])
+            elif "error" in data:
+                print(f"    {RED}→ SerpApi error: {data['error']}{R}")
+            # Check for pagination - get next pages too
+            if "serpapi_pagination" in data and serp_count > 0:
+                next_pages = data["serpapi_pagination"].get("other_pages", {})
+                for page_key, page_url in list(next_pages.items())[:2]:
+                    try:
+                        resp2 = requests.get(page_url, timeout=20)
+                        data2 = resp2.json()
+                        if "local_results" in data2:
+                            for r in data2["local_results"]:
+                                name = r.get("title", "")
+                                phone = r.get("phone", "")
+                                address = r.get("address", "")
+                                rating = r.get("rating", "")
+                                reviews = r.get("reviews", "")
+                                website = r.get("website", "")
+                                category = r.get("type", "")
+                                _add(name, phone=phone, address=address, rating=rating,
+                                     reviews=reviews, website=website, category=category)
+                            serp_count += len(data2["local_results"])
+                        time.sleep(0.5)
+                    except: break
+            print(f"    {D}→ {serp_count} hasil dari SerpApi{R}")
+        except Exception as e:
+            print(f"    {RED}→ SerpApi error: {e}{R}")
 
-    print(f"    {D}→ {enriched} nomor ditemukan, {no_phone} tanpa nomor{R}")
+    # ── Source 2: tbm=map search (fallback / supplement) ──
+    if serp_count == 0:
+        print(f"  {C}[2/3] Google Maps tbm=map search (fallback)...{R}")
+        try:
+            search_url = _build_maps_search_url(query, lat, lng, zoom=zoom, lang=lang, gl=gl, page_size=20)
+            resp = requests.get(search_url, headers=headers, timeout=15)
+            search_results = _parse_maps_search_response(resp.text)
+            for sr in search_results:
+                key = sr["name"].lower().strip()
+                if key in seen_names: continue
+                is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
+                if not is_t: continue
+                if _check_has_website(sr["website"]):
+                    stats["has_website"] += 1; continue
+                businesses.append({
+                    "name": sr["name"], "phone": "", "address": sr["address"],
+                    "rating": str(sr.get("rating","")), "reviews": str(sr.get("reviews","")),
+                    "website": sr["website"], "category": sr.get("category",""),
+                    "lang": det_lang, "place_id": sr["place_id"],
+                    "lat": sr["lat"], "lng": sr["lng"], "snippet": "",
+                })
+                seen_names.add(key)
+            print(f"    {D}→ {len(search_results)} hasil dari tbm=map{R}")
+        except Exception as e:
+            print(f"    {RED}→ Error: {e}{R}")
+    else:
+        print(f"  {C}[2/3] SerpApi cukup, skip tbm=map{R}")
+
+    # ── Source 3: Enrich phone via place detail (only for tbm=map results without phone) ──
+    need_enrich = [b for b in businesses if not b.get("phone") and b.get("place_id")]
+    if need_enrich:
+        print(f"  {C}[3/3] Enriching {len(need_enrich)} nomor via place detail...{R}")
+        enriched = 0
+        for b in need_enrich[:20]:
+            pid = b.pop("place_id", "")
+            lat_v = b.pop("lat", 0)
+            lng_v = b.pop("lng", 0)
+            if not pid or not lat_v: continue
+            try:
+                det_url = _build_maps_place_url(pid, lat_v, lng_v, lang=lang, gl=gl)
+                det_resp = requests.get(det_url, headers=headers, timeout=12)
+                detail = _parse_maps_place_detail(det_resp.text)
+                if detail["phone"] and _is_real_phone(detail["phone"]):
+                    ph = re.sub(r'[\s\-\(\)\+]', '', detail["phone"])
+                    b["phone"] = ph
+                    enriched += 1
+                if detail["website"] and not b["website"]:
+                    b["website"] = detail["website"]
+                time.sleep(0.3)
+            except: continue
+        print(f"    {D}→ {enriched} nomor ditemukan{R}")
+    else:
+        print(f"  {C}[3/3] Semua sudah ada nomor, skip enrichment{R}")
 
     # Filter: only with phone
     with_phone = [b for b in businesses if b.get("phone")]
@@ -857,7 +959,177 @@ def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", 
 
     return with_phone[:max_results], None
 
-# ──────────────────────────────────────────────────────────────
+def _generate_grid_cells(lat, lng, zoom=13, grid_size=3):
+    """Generate grid cells around a center point for better coverage.
+    
+    At zoom 13, the visible area is ~5km. Split into grid_size x grid_size cells.
+    Each cell covers ~1.7km which is perfect for finding neighborhood businesses.
+    """
+    # Approximate degrees per km at this latitude
+    km_per_deg_lat = 111.0
+    km_per_deg_lng = 111.0 * abs(math.cos(math.radians(lat)))
+    
+    # Visible area at zoom 13 ≈ 5km x 5km
+    visible_km = 5.0
+    cell_km = visible_km / grid_size
+    
+    cells = []
+    for i in range(grid_size):
+        for j in range(grid_size):
+            cell_lat = lat + (i - grid_size/2 + 0.5) * cell_km / km_per_deg_lat
+            cell_lng = lng + (j - grid_size/2 + 0.5) * cell_km / km_per_deg_lng
+            cells.append((cell_lat, cell_lng))
+    return cells
+
+def scrape_grid(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us", grid_size=3):
+    """Grid-based search: split area into cells, search each for better coverage."""
+    try:
+        import requests
+    except ImportError:
+        return [], "pip install requests dulu"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    businesses = []
+    seen_names = set()
+    seen_phones = set()
+    stats = {"total": 0, "no_phone": 0, "has_website": 0, "not_target": 0, "duplicate": 0}
+
+    def _add(name, phone="", address="", rating="", reviews="", website="", category="", snippet=""):
+        nonlocal stats
+        name = name.strip()
+        if not name or len(name) < 3: return
+        key = name.lower().strip()
+        if key in seen_names:
+            stats["duplicate"] += 1; return
+        for dom in PLATFORM_DOMAINS:
+            if dom in key: return
+        if _check_has_website(website, snippet):
+            stats["has_website"] += 1; return
+        is_target, det_lang = _is_global_target(name, address, snippet)
+        if not is_target:
+            stats["not_target"] += 1; return
+        ph_clean = re.sub(r'[\s\-\(\)\+]', '', phone) if phone else ""
+        if ph_clean:
+            ph_digits = re.sub(r'\D', '', ph_clean)
+            if len(ph_digits) < 8 or len(ph_digits) > 15:
+                ph_clean = ""
+        if ph_clean:
+            ph_digits = re.sub(r'\D', '', ph_clean)
+            if ph_digits in seen_phones:
+                stats["duplicate"] += 1; return
+            seen_phones.add(ph_digits)
+        seen_names.add(key)
+        businesses.append({
+            "name": name, "phone": ph_clean, "address": address.strip(),
+            "rating": str(rating), "reviews": str(reviews),
+            "website": website.strip(), "category": category.strip(),
+            "lang": det_lang, "snippet": snippet[:200] if snippet else "",
+        })
+
+    cells = _generate_grid_cells(lat, lng, zoom, grid_size)
+    print(f"  {C}Grid: {grid_size}x{grid_size} = {len(cells)} cells{R}")
+
+    for ci, (cell_lat, cell_lng) in enumerate(cells):
+        if len(businesses) >= max_results:
+            break
+
+        # SerpApi for this cell
+        if SERP_API_KEY:
+            try:
+                params = {
+                    "engine": "google_maps",
+                    "q": query,
+                    "ll": f"@{cell_lat},{cell_lng},{zoom}z",
+                    "type": "search",
+                    "api_key": SERP_API_KEY,
+                }
+                resp = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+                data = resp.json()
+                if "local_results" in data:
+                    for r in data["local_results"]:
+                        name = r.get("title", "")
+                        phone = r.get("phone", "")
+                        address = r.get("address", "")
+                        rating = r.get("rating", "")
+                        reviews = r.get("reviews", "")
+                        website = r.get("website", "")
+                        category = r.get("type", "")
+                        _add(name, phone=phone, address=address, rating=rating,
+                             reviews=reviews, website=website, category=category)
+                    # Get next pages
+                    if "serpapi_pagination" in data:
+                        next_pages = data["serpapi_pagination"].get("other_pages", {})
+                        for page_url in list(next_pages.values())[:1]:
+                            try:
+                                resp2 = requests.get(page_url, timeout=20)
+                                data2 = resp2.json()
+                                if "local_results" in data2:
+                                    for r in data2["local_results"]:
+                                        _add(r.get("title",""), phone=r.get("phone",""),
+                                             address=r.get("address",""), rating=r.get("rating",""),
+                                             reviews=r.get("reviews",""), website=r.get("website",""),
+                                             category=r.get("type",""))
+                                time.sleep(0.3)
+                            except: break
+                time.sleep(0.5)
+            except: continue
+        else:
+            # tbm=map fallback
+            try:
+                search_url = _build_maps_search_url(query, cell_lat, cell_lng, zoom=zoom, lang=lang, gl=gl, page_size=20)
+                resp = requests.get(search_url, headers=headers, timeout=15)
+                search_results = _parse_maps_search_response(resp.text)
+                for sr in search_results:
+                    key = sr["name"].lower().strip()
+                    if key in seen_names: continue
+                    is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
+                    if not is_t: continue
+                    if _check_has_website(sr["website"]):
+                        stats["has_website"] += 1; continue
+                    businesses.append({
+                        "name": sr["name"], "phone": "", "address": sr["address"],
+                        "rating": str(sr.get("rating","")), "reviews": str(sr.get("reviews","")),
+                        "website": sr["website"], "category": sr.get("category",""),
+                        "lang": det_lang, "place_id": sr["place_id"],
+                        "lat": sr["lat"], "lng": sr["lng"], "snippet": "",
+                    })
+                    seen_names.add(key)
+                time.sleep(0.3)
+            except: continue
+
+    # Enrich phones for tbm=map results without phone
+    need_enrich = [b for b in businesses if not b.get("phone") and b.get("place_id")]
+    if need_enrich:
+        print(f"  {C}Enriching {len(need_enrich)} phones...{R}")
+        for b in need_enrich[:15]:
+            pid = b.pop("place_id", "")
+            lat_v = b.pop("lat", 0)
+            lng_v = b.pop("lng", 0)
+            if not pid or not lat_v: continue
+            try:
+                det_url = _build_maps_place_url(pid, lat_v, lng_v, lang=lang, gl=gl)
+                det_resp = requests.get(det_url, headers=headers, timeout=12)
+                detail = _parse_maps_place_detail(det_resp.text)
+                if detail["phone"] and _is_real_phone(detail["phone"]):
+                    b["phone"] = re.sub(r'[\s\-\(\)\+]', '', detail["phone"])
+                time.sleep(0.3)
+            except: continue
+
+    # Filter: only with phone
+    with_phone = [b for b in businesses if b.get("phone")]
+    print(f"\n  {G}✓ Grid: {len(with_phone)} target dengan nomor HP{R}")
+    if stats["has_website"]:
+        print(f"    {D}  skip sudah ada web: {stats['has_website']}{R}")
+    if stats["not_target"]:
+        print(f"    {D}  skip bukan target: {stats['not_target']}{R}")
+    if stats["duplicate"]:
+        print(f"    {D}  skip duplikat: {stats['duplicate']}{R}")
+
+    return with_phone[:max_results], None
 #  CSV
 # ──────────────────────────────────────────────────────────────
 
@@ -1469,7 +1741,7 @@ def flow_scrape_auto_dm():
 
                 print(f"\n  {C}[{qi+1}/{len(LOCI)}] {query}{R}")
                 coords = COUNTRY_COORDS.get(kota, (-6.2, 106.8, 12, "en", "id"))
-                businesses, err = scrape_google_maps(query, max_results=10,
+                businesses, err = scrape_grid(query, max_results=10,
                     lat=coords[0], lng=coords[1], zoom=coords[2], lang=coords[3], gl=coords[4])
                 if err:
                     print(f"  {RED}[!] Error: {err}{R}")
