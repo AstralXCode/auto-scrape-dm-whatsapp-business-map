@@ -1366,6 +1366,18 @@ def mark_sent(phone, name):
     sent[phone] = {"name": name, "ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
     save_sent(sent)
 
+def read_queue():
+    """Baca wa_queue.json"""
+    if not os.path.exists(QUEUE_FILE): return []
+    try:
+        with open(QUEUE_FILE) as f: return json.load(f)
+    except: return []
+
+def write_queue(queue):
+    """Tulis wa_queue.json"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(QUEUE_FILE, "w") as f: json.dump(queue, f, indent=2)
+
 def flow_scrape_auto_dm():
     """ONE-CLICK: Scrape + Auto DM + Auto Reply - Jalan otomatis 24/7"""
     clear(); rainbow_banner()
