@@ -529,219 +529,333 @@ def _check_has_website(url, snippet=""):
     
     return False
 
-def scrape_google_maps(query, max_results=20):
+def _get(data, *indices, default=None):
+    """Safe nested list access."""
+    current = data
+    for idx in indices:
+        if not isinstance(current, (list, tuple)): return default
+        if idx < 0 or idx >= len(current): return default
+        current = current[idx]
+    return current if current is not None else default
+
+def _build_maps_search_url(query, lat, lng, zoom=13, lang="en", gl="us", page_size=20, start=0):
+    """Build Google Maps internal tbm=map search URL with protobuf pb parameter."""
+    from urllib.parse import quote
+    span = 360 / (2 ** zoom)
+    d_value = span * 111320
+    pb = (
+        f"!4m12!1m3!1d{d_value}!2d{lng}!3d{lat}"
+        f"!2m3!1f0!2f0!3f0!3m2!1i1280!2i593!4f13.1"
+        f"!7i{page_size}"
+    )
+    if start > 0:
+        pb += f"!8i{start}"
+    pb += (
+        "!10b1"
+        "!12m25!1m5!18b1!30b1!31m1!1b1!34e1!2m4!5m1!6e2!20e3!39b1"
+        "!10b1!12b1!13b1!16b1!17m1!3e1!20m3!5e2!6b1!14b1!46m1!1b0!96b1!99b1"
+        "!19m4!2m3!1i360!2i120!4i8"
+        "!20m65!2m2!1i203!2i100!3m2!2i4!5b1"
+        "!6m6!1m2!1i86!2i86!1m2!1i408!2i240"
+        "!7m33!1m3!1e1!2b0!3e3!1m3!1e2!2b1!3e2!1m3!1e2!2b0!3e3"
+        "!1m3!1e8!2b0!3e3!1m3!1e10!2b0!3e3!1m3!1e10!2b1!3e2"
+        "!1m3!1e10!2b0!3e4!1m3!1e9!2b1!3e2!2b1!9b0"
+        "!15m16!1m7!1m2!1m1!1e2!2m2!1i195!2i195!3i20"
+        "!1m7!1m2!1m1!1e2!2m2!1i195!2i195!3i20"
+        "!22m2!1sdummy!7e81"
+        "!24m109!1m27!13m9!2b1!3b1!4b1!6i1!8b1!9b1!14b1!20b1!25b1"
+        "!18m16!3b1!4b1!5b1!6b1!9b1!13b1!14b1!17b1!20b1!21b1!22b1"
+        "!32b1!33m1!1b1!34b1!36e2"
+        "!10m1!8e3!11m1!3e1!17b1!20m2!1e3!1e6"
+        "!24b1!25b1!26b1!27b1!29b1!30m1!2b1!36b1!37b1"
+        "!39m3!2m2!2i1!3i1!43b1!52b1!54m1!1b1!55b1!56m1!1b1"
+        "!61m2!1m1!1e1!65m5!3m4!1m3!1m2!1i224!2i298"
+        "!72m22!1m8!2b1!5b1!7b1!12m4!1b1!2b1!4m1!1e1!4b1"
+        "!8m10!1m6!4m1!1e1!4m1!1e3!4m1!1e4"
+        "!3sother_user_google_review_posts__and__hotel_and_vr_partner_review_posts"
+        "!6m1!1e1!9b1!89b1!90m2!1m1!1e2"
+        "!98m3!1b1!2b1!3b1!103b1!113b1!114m3!1b1!2m1!1b1"
+        "!117b1!122m1!1b1!126b1!127b1!128m1!1b0"
+        "!26m4!2m3!1i80!2i92!4i8"
+        "!30m28!1m6!1m2!1i0!2i0!2m2!1i530!2i593"
+        "!1m6!1m2!1i1230!2i0!2m2!1i1280!2i593"
+        "!1m6!1m2!1i0!2i0!2m2!1i1280!2i20"
+        "!1m6!1m2!1i0!2i573!2m2!1i1280!2i593"
+        "!34m19!2b1!3b1!4b1!6b1!8m6!1b1!3b1!4b1!5b1!6b1!7b1"
+        "!9b1!12b1!14b1!20b1!23b1!25b1!26b1!31b1"
+        "!37m1!1e81!42b1!47m0"
+        "!49m10!3b1!6m2!1b1!2b1!7m2!1e3!2b1!8b1!9b1!10e2"
+        "!50m4!2e2!3m2!1b1!3b1"
+        "!67m5!7b1!10b1!14b1!15m1!1b0!69i775!77b1"
+    )
+    return (
+        f"https://www.google.com/search?tbm=map&authuser=0&hl={lang}&gl={gl}"
+        f"&pb={pb}&q={quote(query)}&tch=1&ech=1&psi=dummy.{int(time.time()*1000)}.1"
+    )
+
+def _build_maps_place_url(place_id, lat, lng, lang="en", gl="us"):
+    """Build Google Maps place detail URL with protobuf pb parameter."""
+    from urllib.parse import quote
+    enc_pid = quote(place_id, safe="")
+    return (
+        f"https://www.google.com/maps/preview/place?authuser=0&hl={lang}&gl={gl}"
+        f"&pb=!1m6!1s{enc_pid}!3m1!1d1000"
+        f"!4m2!3d{lat}!4d{lng}!3m1!1e3"
+    )
+
+def _is_real_phone(s):
+    """Filter out Google internal IDs from phone numbers."""
+    if not s or not isinstance(s, str): return False
+    s = s.strip()
+    if len(s) < 8 or len(s) > 25: return False
+    if re.search(r'http|html|script|gstatic|google|png|svg|\.com|\.org', s.lower()): return False
+    digits = re.sub(r'[\s\-\(\)\+\.\/]', '', s)
+    if not digits.isdigit(): return False
+    if len(digits) < 7 or len(digits) > 15: return False
+    # Google IDs are raw long digit strings without separators
+    has_separators = bool(re.search(r'[\s\-\(\)\+\.\/]', s))
+    if not has_separators and len(digits) >= 12:
+        return False
+    return True
+
+def _parse_maps_search_response(raw_text):
+    """Parse Google Maps tbm=map search response. Returns list of business dicts."""
+    try:
+        if raw_text.startswith(")]}'"):
+            raw_text = raw_text[4:].lstrip("\n")
+        decoder = json.JSONDecoder()
+        outer, _ = decoder.raw_decode(raw_text)
+        inner_text = outer["d"] if isinstance(outer, dict) and "d" in outer else raw_text
+        if inner_text.startswith(")]}'"):
+            inner_text = inner_text[4:].lstrip("\n")
+        data = json.loads(inner_text)
+    except:
+        return []
+
+    # Find listings array (biggest array with many list entries)
+    listings = []
+    if isinstance(data, list):
+        for i in range(len(data) - 1, -1, -1):
+            elem = data[i]
+            if not isinstance(elem, list): continue
+            for entry in elem:
+                if isinstance(entry, list) and len(entry) >= 2:
+                    if isinstance(entry[1], list) and len(entry[1]) > 50:
+                        listings = elem
+                        break
+            if listings: break
+
+    results = []
+    for item in listings:
+        if not (isinstance(item, list) and isinstance(item[1], list)):
+            continue
+        pd = item[1]
+        if len(pd) < 20: continue
+        name = _get(pd, 11, default="")
+        pid = _get(pd, 10, default="")
+        if not name or not pid: continue
+        addr = _get(pd, 18, default="")
+        cat_list = _get(pd, 13, default=[])
+        cat = cat_list[0] if isinstance(cat_list, list) and cat_list else ""
+        rating = _get(pd, 4, 7, default=0)
+        reviews = _get(pd, 4, 8, default=0)
+        lat_v = _get(pd, 9, 2, default=0)
+        lng_v = _get(pd, 9, 3, default=0)
+        # Website from search (if available)
+        website = _get(pd, 7, 0, default="")
+        if isinstance(website, list): website = _get(pd, 7, 0, 0, default="")
+        if not isinstance(website, str): website = ""
+        if not website.startswith("http"): website = ""
+
+        results.append({
+            "name": name,
+            "place_id": pid,
+            "address": addr,
+            "category": cat,
+            "rating": rating,
+            "reviews": reviews,
+            "lat": lat_v,
+            "lng": lng_v,
+            "website": website,
+        })
+    return results
+
+def _parse_maps_place_detail(raw_text):
+    """Parse Google Maps place detail response. Returns dict with phone, website, email."""
+    result = {"phone": "", "website": "", "email": ""}
+    try:
+        if raw_text.startswith(")]}'"):
+            raw_text = raw_text[4:].lstrip("\n")
+        data = json.loads(raw_text)
+    except:
+        return result
+
+    # Phone at data[6][178][0][0]
+    phone = _get(data, 6, 178, 0, 0, default="")
+    if _is_real_phone(phone):
+        result["phone"] = phone
+    else:
+        # Recursive search for phone in top-level array
+        def _find_phone(obj, d=0):
+            if d > 8: return ""
+            if isinstance(obj, str) and _is_real_phone(obj): return obj
+            if isinstance(obj, list):
+                for item in obj[:100]:
+                    r = _find_phone(item, d+1)
+                    if r: return r
+            return ""
+        result["phone"] = _find_phone(data)
+
+    # Website at data[6][7][0]
+    web_list = _get(data, 6, 7, default=[])
+    if isinstance(web_list, list) and web_list:
+        website = _get(web_list, 0, default="")
+        if isinstance(website, str) and website.startswith("http"):
+            result["website"] = website
+
+    # Email at data[6][178][0][2] or recursive
+    email = _get(data, 6, 178, 0, 2, default="")
+    if isinstance(email, str) and "@" in email and "." in email:
+        result["email"] = email
+    else:
+        def _find_email(obj, d=0):
+            if d > 8: return ""
+            if isinstance(obj, str):
+                m = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', obj)
+                if m and "google.com" not in m.group(0):
+                    return m.group(0)
+            if isinstance(obj, list):
+                for item in obj[:50]:
+                    r = _find_email(item, d+1)
+                    if r: return r
+            return ""
+        result["email"] = _find_email(data)
+
+    return result
+
+def scrape_google_maps(query, max_results=20, lat=0, lng=0, zoom=13, lang="en", gl="us"):
+    """Scrape Google Maps using internal tbm=map API + place detail enrichment.
+    
+    Strategy:
+    1. Search via tbm=map → get businesses with place_ids, names, addresses
+    2. For each business, fetch /maps/preview/place → get phone, website, email
+    3. Filter: skip platforms, big brands, businesses with websites
+    """
     try:
         import requests
-        from bs4 import BeautifulSoup
     except ImportError:
-        return [], "pip install requests beautifulsoup4 dulu"
+        return [], "pip install requests dulu"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
     businesses = []
     seen_names = set()
-    skipped_count = {"no_phone": 0, "has_website": 0, "not_umkm": 0, "duplicate": 0}
+    seen_phones = set()
+    stats = {"total": 0, "no_phone": 0, "has_website": 0, "not_target": 0, "duplicate": 0}
 
-    def _add(name, phone="", address="", rating="", reviews="", website="", category="", source="", snippet=""):
-        nonlocal skipped_count
+    def _add(name, phone="", address="", rating="", reviews="", website="", category="", snippet=""):
+        nonlocal stats
         name = name.strip()
         if not name or len(name) < 3: return
-        key = name.lower()
+        key = name.lower().strip()
         if key in seen_names:
-            skipped_count["duplicate"] += 1; return
-        
-        # Check if it's a platform domain in name
+            stats["duplicate"] += 1; return
         for dom in PLATFORM_DOMAINS:
-            if dom in key:
-                return
-
-        # FILTER: Skip jika sudah ada website
-        has_web = _check_has_website(website, snippet)
-        if not has_web:
-            for ext in [".com",".co",".org",".net",".io",".shop",".store"]:
-                if ext in snippet.lower() and not any(p in snippet.lower() for p in PLATFORM_DOMAINS):
-                    has_web = True; break
-        if has_web:
-            skipped_count["has_website"] += 1; return
-
-        # FILTER: Global UMKM target
-        is_target, lang = _is_global_target(name, address, snippet)
+            if dom in key: return
+        if _check_has_website(website, snippet):
+            stats["has_website"] += 1; return
+        is_target, det_lang = _is_global_target(name, address, snippet)
         if not is_target:
-            skipped_count["not_umkm"] += 1; return
-
+            stats["not_target"] += 1; return
+        ph_clean = re.sub(r'[\s\-\(\)]', '', phone) if phone else ""
+        if ph_clean:
+            ph_digits = re.sub(r'\D', '', ph_clean)
+            if ph_digits in seen_phones:
+                stats["duplicate"] += 1; return
+            seen_phones.add(ph_digits)
         seen_names.add(key)
         businesses.append({
-            "name": name, "phone": phone.strip(), "address": address.strip(),
+            "name": name, "phone": ph_clean, "address": address.strip(),
             "rating": str(rating), "reviews": str(reviews),
             "website": website.strip(), "category": category.strip(),
-            "lang": lang,
+            "lang": det_lang, "snippet": snippet[:200] if snippet else "",
         })
 
-    # ── Source 1: DuckDuckGo (try, handle 403) ──
-    print(f"  {C}[1/4] DuckDuckGo...{R}")
+    # ── Step 1: Search via tbm=map ──
+    print(f"  {C}[1/2] Google Maps search...{R}")
     try:
-        ddg_queries = [
-            f"{query} nomor telepon",
-            f"{query} kontak wa alamat",
-            f"{query} terdepat buka",
-            f"UMKM {query} telepon",
-        ]
-        ddg_ok = False
-        for qq in ddg_queries:
-            try:
-                resp = requests.post("https://html.duckduckgo.com/html/",
-                                     data={"q": qq}, headers=headers, timeout=12)
-                if resp.status_code == 403:
-                    print(f"    {D}→ DDG block, skip...{R}")
-                    break
-                ddg_ok = True
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for r in soup.find_all("div", class_="result"):
-                    title_el = r.find("a", class_="result__a")
-                    snippet_el = r.find("a", class_="result__snippet")
-                    if not title_el: continue
-                    title = title_el.get_text(strip=True)
-                    snippet = snippet_el.get_text(strip=True) if snippet_el else ""
-                    url = title_el.get("href", "")
-                    phones = re.findall(r'(?:\+62|62|0)\d[\d\s\-]{7,15}', snippet)
-                    phone = phones[0].strip() if phones else ""
-                    name = re.sub(r'[^a-zA-Z0-9\s\-\(\)&]', '', title).strip()
-                    if name and len(name) > 3:
-                        _add(name, phone=phone, address=snippet[:120], website=url,
-                             source="duckduckgo", snippet=snippet)
-                time.sleep(1)  # Delay antar query
-            except Exception as e:
-                continue
-        print(f"    {D}→ {len(businesses)} hasil{R}")
+        search_url = _build_maps_search_url(query, lat, lng, zoom=zoom, lang=lang, gl=gl, page_size=20)
+        resp = requests.get(search_url, headers=headers, timeout=15)
+        search_results = _parse_maps_search_response(resp.text)
+        print(f"    {D}→ {len(search_results)} hasil ditemukan{R}")
+
+        # Dedup from search
+        for sr in search_results:
+            key = sr["name"].lower().strip()
+            if key in seen_names: continue
+            for dom in PLATFORM_DOMAINS:
+                if dom in key: continue
+            is_t, det_lang = _is_global_target(sr["name"], sr["address"], sr.get("category",""))
+            if not is_t: continue
+            if _check_has_website(sr["website"]):
+                stats["has_website"] += 1; continue
+            businesses.append({
+                "name": sr["name"], "phone": "", "address": sr["address"],
+                "rating": str(sr.get("rating","")), "reviews": str(sr.get("reviews","")),
+                "website": sr["website"], "category": sr.get("category",""),
+                "lang": det_lang, "place_id": sr["place_id"],
+                "lat": sr["lat"], "lng": sr["lng"], "snippet": "",
+            })
+            seen_names.add(key)
     except Exception as e:
-        print(f"    {RED}→ Error: {e}{R}")
+        print(f"    {RED}→ Error search: {e}{R}")
 
-    # ── Source 2: Google Search ──
-    print(f"  {C}[2/4] Google search...{R}")
-    try:
-        for qq in [f"{query} telepon WhatsApp", f"{query} alamat kontak"]:
-            resp = requests.get(f"https://www.google.com/search?q={qq.replace(' ','+')}&hl=id&gl=id",
-                               headers=headers, timeout=12)
-            # Extract from search result blocks
-            blocks = re.findall(r'<div[^>]*>(.*?)</div>', resp.text, re.DOTALL)
-            for block in blocks:
-                phones = re.findall(r'(?:\+62|62|0)\d[\d\s\-]{7,15}', block)
-                if phones:
-                    # Get nearby text as name
-                    text = re.sub(r'<[^>]+>', ' ', block).strip()
-                    words = [w for w in text.split() if len(w) > 2 and not w.startswith(('http','www'))]
-                    if words:
-                        name = ' '.join(words[:5])
-                        _add(name, phone=phones[0].strip(), source="google")
-            # Extract from aria-labels
-            labels = re.findall(r'aria-label="([^"]{5,80})"', resp.text)
-            for lb in labels:
-                if not any(s in lb.lower() for s in SKIP_WORDS):
-                    _add(lb.strip(), source="google_aria")
-        print(f"    {D}→ {len(businesses)} hasil{R}")
-    except Exception as e:
-        print(f"    {RED}→ Error: {e}{R}")
+    # ── Step 2: Enrich via place detail ──
+    print(f"  {C}[2/2] Enriching phone numbers...{R}")
+    enriched = 0
+    no_phone = 0
+    for b in businesses[:40]:
+        pid = b.pop("place_id", "")
+        lat_v = b.pop("lat", 0)
+        lng_v = b.pop("lng", 0)
+        if not pid or not lat_v:
+            no_phone += 1; continue
+        if b["phone"]:
+            enriched += 1; continue
+        try:
+            det_url = _build_maps_place_url(pid, lat_v, lng_v, lang=lang, gl=gl)
+            det_resp = requests.get(det_url, headers=headers, timeout=12)
+            detail = _parse_maps_place_detail(det_resp.text)
+            if detail["phone"] and _is_real_phone(detail["phone"]):
+                b["phone"] = detail["phone"]
+                enriched += 1
+            if detail["website"] and not b["website"]:
+                b["website"] = detail["website"]
+            time.sleep(0.3)
+        except:
+            no_phone += 1
+            continue
 
-    # ── Source 3: Google Maps (try embedded data) ──
-    print(f"  {C}[3/4] Google Maps embedded...{R}")
-    try:
-        resp = requests.get(f"https://www.google.com/maps/search/{query.replace(' ','+')}/@-6.9,107.6,13z?hl=id",
-                           headers=headers, timeout=15)
-        # Method: AF_initDataCallback
-        for m in re.finditer(r"AF_initDataCallback\(\{key:\s*'ds:1'.*?data:(.*?)\}\);", resp.text, re.DOTALL):
-            try:
-                data = json.loads(m.group(1))
-                for b in _parse_ds1(data):
-                    _add(b["name"], phone=b.get("phone",""), address=b.get("address",""),
-                         rating=b.get("rating",""), reviews=b.get("reviews",""),
-                         website=b.get("website",""), category=b.get("category",""),
-                         source="maps_json")
-            except: continue
+    print(f"    {D}→ {enriched} nomor ditemukan, {no_phone} tanpa nomor{R}")
 
-        # Method: aria-labels
-        labels = re.findall(r'aria-label="([^"]{5,80})"', resp.text)
-        phones = re.findall(r'(?:\+62|62|0)\d[\d\s\-]{7,15}', resp.text)
-        pi = 0
-        for lb in labels:
-            if any(s in lb.lower() for s in SKIP_WORDS): continue
-            ph = phones[pi] if pi < len(phones) else ""
-            pi += 1
-            _add(lb.strip(), phone=ph.strip() if ph else "", source="maps_aria")
-        print(f"    {D}→ {len(businesses)} hasil{R}")
-    except Exception as e:
-        print(f"    {RED}→ Error: {e}{R}")
+    # Filter: only with phone
+    with_phone = [b for b in businesses if b.get("phone")]
+    without_phone = [b for b in businesses if not b.get("phone")]
 
-    # ── Source 4: Business directories ──
-    print(f"  {C}[4/4] Business directories...{R}")
-    try:
-        for dir_url in [
-            f"https://www.google.com/search?q={query.replace(' ','+')}&hl=id",
-        ]:
-            resp = requests.get(dir_url, headers=headers, timeout=12)
-            # Extract phone patterns from full page
-            all_phones = re.findall(r'(?:\+62|62|0)\d[\d\s\-\(\)]{8,20}', resp.text)
-            all_phones = list(set([p.strip() for p in all_phones if len(re.sub(r'\D','',p)) >= 10]))
+    print(f"\n  {G}✓ Total: {len(with_phone)} target dengan nomor HP{R}")
+    if without_phone:
+        print(f"    {D}  tanpa nomor: {len(without_phone)} (dihapus){R}")
+    if stats["has_website"]:
+        print(f"    {D}  skip sudah ada web: {stats['has_website']}{R}")
+    if stats["not_target"]:
+        print(f"    {D}  skip bukan target: {stats['not_target']}{R}")
+    if stats["duplicate"]:
+        print(f"    {D}  skip duplikat: {stats['duplicate']}{R}")
 
-            # Extract business-like titles
-            titles = re.findall(r'<(?:h[1-6]|span|div)[^>]*>([^<]{5,80})</(?:h[1-6]|span|div)>', resp.text)
-            for t in titles:
-                clean = re.sub(r'<[^>]+>', '', t).strip()
-                if clean and not any(s in clean.lower() for s in SKIP_WORDS):
-                    # Try to find associated phone
-                    idx = resp.text.find(clean)
-                    if idx >= 0:
-                        nearby = resp.text[max(0,idx-200):idx+200]
-                        n_phones = re.findall(r'(?:\+62|62|0)\d[\d\s\-]{7,15}', nearby)
-                        ph = n_phones[0].strip() if n_phones else ""
-                        _add(clean, phone=ph, source="directory")
-        print(f"    {D}→ {len(businesses)} hasil{R}")
-    except Exception as e:
-        print(f"    {RED}→ Error: {e}{R}")
-
-    # ── Deduplicate & filter ──
-    final = []
-    for b in businesses:
-        b.pop("source", None)
-        final.append(b)
-
-    print(f"\n  {G}✓ Total: {len(final)} UMKM target{R}")
-    print(f"    {Y}⊘ tanpa website{R}")
-    if skipped_count["has_website"]:
-        print(f"    {D}  skip sudah ada web: {skipped_count['has_website']}{R}")
-    if skipped_count["no_phone"]:
-        print(f"    {D}  skip tanpa no HP: {skipped_count['no_phone']}{R}")
-    if skipped_count["not_umkm"]:
-        print(f"    {D}  skip bukan UMKM: {skipped_count['not_umkm']}{R}")
-    if skipped_count["duplicate"]:
-        print(f"    {D}  skip duplikat: {skipped_count['duplicate']}{R}")
-    return final[:max_results], None
-
-def _parse_ds1(data):
-    results = []
-    try:
-        if not isinstance(data, list) or len(data) < 4: return []
-        container = data[3] if isinstance(data[3], list) else []
-        items = container[0] if container and isinstance(container[0], list) else []
-        for item in items:
-            if not isinstance(item, list): continue
-            try:
-                b = {}
-                if len(item)>11 and isinstance(item[11],list) and item[11]: b["name"]=str(item[11][0]).strip()
-                elif len(item)>2 and isinstance(item[2],str): b["name"]=item[2].strip()
-                else: continue
-                b["address"] = str(item[14][0]).strip() if len(item)>14 and isinstance(item[14],list) and item[14] else ""
-                b["phone"]   = str(item[17][0]).strip() if len(item)>17 and isinstance(item[17],list) and item[17] else ""
-                b["rating"]  = str(item[4][7]) if len(item)>4 and isinstance(item[4],list) and len(item[4])>7 and item[4][7] else ""
-                b["reviews"] = str(item[4][8]) if len(item)>4 and isinstance(item[4],list) and len(item[4])>8 and item[4][8] else ""
-                b["website"] = str(item[7][2]).strip() if len(item)>7 and isinstance(item[7],list) and len(item[7])>2 and item[7][2] else ""
-                b["category"]= str(item[13][0]).strip() if len(item)>13 and isinstance(item[13],list) and item[13] else ""
-                if b.get("name"): results.append(b)
-            except: continue
-    except: pass
-    return results
+    return with_phone[:max_results], None
 
 # ──────────────────────────────────────────────────────────────
 #  CSV
@@ -1150,6 +1264,85 @@ def is_max_acc_reached():
 # Daftar lokasi GLOBAL yang akan di-scrape otomatis
 LOCI = GLOBAL_LOCATIONS  # Use global locations list
 
+# Approximate center coordinates per country for the protobuf search
+COUNTRY_COORDS = {
+    "Indonesia": (-6.2, 106.8, 12, "en", "id"),
+    "Malaysia": (3.14, 101.69, 12, "en", "my"),
+    "Philippines": (14.6, 120.98, 12, "en", "ph"),
+    "Thailand": (13.75, 100.52, 12, "en", "th"),
+    "Vietnam": (10.82, 106.63, 12, "en", "vn"),
+    "India": (19.08, 72.88, 12, "hi", "in"),
+    "Pakistan": (33.69, 73.04, 12, "en", "pk"),
+    "Bangladesh": (23.68, 90.36, 12, "en", "bd"),
+    "Sri Lanka": (7.87, 80.77, 12, "en", "lk"),
+    "Nepal": (27.72, 85.32, 12, "en", "np"),
+    "Myanmar": (19.76, 96.08, 12, "en", "mm"),
+    "Cambodia": (11.56, 104.92, 12, "en", "kh"),
+    "Laos": (17.97, 102.63, 12, "en", "la"),
+    "China": (39.9, 116.4, 12, "zh", "cn"),
+    "Japan": (35.68, 139.69, 12, "ja", "jp"),
+    "South Korea": (37.57, 126.98, 12, "ko", "kr"),
+    "Taiwan": (25.03, 121.57, 12, "zh", "tw"),
+    "Hong Kong": (22.32, 114.17, 12, "en", "hk"),
+    "Singapore": (1.35, 103.82, 13, "en", "sg"),
+    "Brazil": (-15.78, -47.93, 12, "pt", "br"),
+    "Mexico": (19.43, -99.13, 12, "es", "mx"),
+    "Argentina": (-34.6, -58.38, 12, "es", "ar"),
+    "Colombia": (4.71, -74.07, 12, "es", "co"),
+    "Chile": (-33.45, -70.67, 12, "es", "cl"),
+    "Peru": (-12.05, -77.04, 12, "es", "pe"),
+    "Ecuador": (-0.18, -78.47, 12, "es", "ec"),
+    "Venezuela": (10.48, -66.9, 12, "es", "ve"),
+    "Dominican Republic": (18.47, -69.9, 12, "es", "do"),
+    "Cuba": (23.11, -82.37, 12, "es", "cu"),
+    "Nigeria": (9.08, 7.49, 12, "en", "ng"),
+    "Kenya": (-1.29, 36.82, 12, "en", "ke"),
+    "Ghana": (5.6, -0.19, 12, "en", "gh"),
+    "South Africa": (-33.93, 18.42, 12, "en", "za"),
+    "Egypt": (30.04, 31.24, 12, "ar", "eg"),
+    "Morocco": (33.97, -6.85, 12, "ar", "ma"),
+    "Tunisia": (36.81, 10.17, 12, "ar", "tn"),
+    "Algeria": (36.75, 3.06, 12, "ar", "dz"),
+    "Turkey": (39.93, 32.85, 12, "tr", "tr"),
+    "Saudi Arabia": (24.71, 46.67, 12, "ar", "sa"),
+    "UAE": (25.2, 55.27, 13, "en", "ae"),
+    "Qatar": (25.29, 51.53, 12, "en", "qa"),
+    "Kuwait": (29.38, 47.99, 12, "ar", "kw"),
+    "Bahrain": (26.07, 50.55, 13, "en", "bh"),
+    "Oman": (23.59, 58.55, 12, "en", "om"),
+    "Jordan": (31.95, 35.93, 12, "ar", "jo"),
+    "Lebanon": (33.89, 35.5, 12, "ar", "lb"),
+    "Iraq": (33.31, 44.37, 12, "ar", "iq"),
+    "Pakistan": (33.69, 73.04, 12, "en", "pk"),
+    "Bangladesh": (23.68, 90.36, 12, "en", "bd"),
+    "Russia": (55.76, 37.62, 12, "ru", "ru"),
+    "Ukraine": (50.45, 30.52, 12, "uk", "ua"),
+    "Poland": (52.23, 21.01, 12, "pl", "pl"),
+    "Czech Republic": (50.08, 14.44, 12, "cs", "cz"),
+    "Romania": (44.43, 26.1, 12, "ro", "ro"),
+    "Hungary": (47.5, 19.04, 12, "hu", "hu"),
+    "Germany": (52.52, 13.41, 12, "de", "de"),
+    "France": (48.86, 2.35, 12, "fr", "fr"),
+    "Spain": (40.42, -3.7, 12, "es", "es"),
+    "Italy": (41.9, 12.5, 12, "it", "it"),
+    "Portugal": (38.72, -9.14, 12, "pt", "pt"),
+    "Netherlands": (52.37, 4.9, 12, "nl", "nl"),
+    "Belgium": (50.85, 4.35, 12, "fr", "be"),
+    "Sweden": (59.33, 18.07, 12, "sv", "se"),
+    "Norway": (59.91, 10.75, 12, "no", "no"),
+    "Denmark": (55.68, 12.57, 12, "da", "dk"),
+    "Finland": (60.17, 24.94, 12, "fi", "fi"),
+    "Greece": (37.97, 23.73, 12, "el", "gr"),
+    "Austria": (48.21, 16.37, 12, "de", "at"),
+    "Switzerland": (46.95, 7.45, 12, "de", "ch"),
+    "Ireland": (53.35, -6.26, 12, "en", "ie"),
+    "UK": (51.51, -0.13, 12, "en", "gb"),
+    "USA": (38.9, -77.04, 12, "en", "us"),
+    "Canada": (45.42, -75.7, 12, "en", "ca"),
+    "Australia": (-33.87, 151.21, 12, "en", "au"),
+    "New Zealand": (-41.29, 174.78, 12, "en", "nz"),
+}
+
 def load_sent():
     """Load nomor yang sudah dikirim"""
     if os.path.exists(SENT_FILE):
@@ -1263,7 +1456,9 @@ def flow_scrape_auto_dm():
                     time.sleep(600)
 
                 print(f"\n  {C}[{qi+1}/{len(LOCI)}] {query}{R}")
-                businesses, err = scrape_google_maps(query, max_results=10)
+                coords = COUNTRY_COORDS.get(kota, (-6.2, 106.8, 12, "en", "id"))
+                businesses, err = scrape_google_maps(query, max_results=10,
+                    lat=coords[0], lng=coords[1], zoom=coords[2], lang=coords[3], gl=coords[4])
                 if err:
                     print(f"  {RED}[!] Error: {err}{R}")
                     continue
@@ -1340,7 +1535,7 @@ def flow_scrape():
     mx = input(f"  {G}▸ Maks hasil (default 20): {R}").strip()
     max_r = int(mx) if mx.isdigit() else 20
 
-    businesses, err = scrape_google_maps(query, max_r)
+    businesses, err = scrape_google_maps(query, max_r, lat=-6.2, lng=106.8, zoom=12, lang="en", gl="id")
     if err: print(f"\n  {RED}[!] {err}{R}"); input(f"\n  {D}Enter...{R}"); return
     if not businesses:
         print(f"\n  {Y}[!] Tidak ada hasil untuk '{query}'.{R}")
